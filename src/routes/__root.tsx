@@ -11,6 +11,9 @@ import { useEffect, type ReactNode } from "react";
 
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
+import { AppShell } from "../components/layout/app-shell";
+import { CurrentProjectProvider } from "../lib/current-project";
+import { Toaster } from "../components/ui/sonner";
 
 function NotFoundComponent() {
   return (
@@ -125,8 +128,13 @@ function RootComponent() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
-      <Outlet />
+      <CurrentProjectProvider initialProjectId="prj-atlas-store">
+        <AppShell>
+          {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
+          <Outlet />
+        </AppShell>
+      </CurrentProjectProvider>
+      <Toaster />
     </QueryClientProvider>
   );
 }
