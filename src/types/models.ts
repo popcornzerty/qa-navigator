@@ -194,6 +194,20 @@ export interface ProjectSettings {
   playwright: { testDirectory: string; baseUrl: string; browsers: string[]; headless: boolean };
 }
 
+/* Jira */
+
+export interface JiraImportInput {
+  jql?: string;
+  maxResults?: number;
+}
+
+export interface JiraImportResult {
+  imported: number;
+  updated: number;
+  storyIds: string[];
+  jql: string;
+}
+
 export interface CreateProjectInput {
   name: string;
   repositorySource: RepositorySource;
