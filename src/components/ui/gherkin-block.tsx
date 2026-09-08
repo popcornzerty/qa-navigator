@@ -1,6 +1,7 @@
 import { Fragment } from "react";
 
-const KEYWORD = /^(Feature|Scenario|Scenario Outline|Background|Examples|Given|When|Then|And|But):?\s?/;
+const KEYWORD =
+  /^(Feature|Scenario|Scenario Outline|Background|Examples|Given|When|Then|And|But):?\s?/;
 
 function keywordClass(keyword: string): string {
   if (keyword === "Feature" || keyword.startsWith("Scenario") || keyword === "Background")

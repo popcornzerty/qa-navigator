@@ -20,7 +20,10 @@ export const storiesApi = {
             if (filters.featureId && story.featureId !== filters.featureId) return false;
             if (filters.status && filters.status !== "all" && story.status !== filters.status)
               return false;
-            if (search && !`${story.id} ${story.title} ${story.featureName}`.toLowerCase().includes(search))
+            if (
+              search &&
+              !`${story.id} ${story.title} ${story.featureName}`.toLowerCase().includes(search)
+            )
               return false;
             return true;
           }),

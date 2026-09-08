@@ -60,7 +60,8 @@ export const testsApi = {
   regenerate(testId: string): Promise<{ jobId: string; status: string }> {
     return resolve(
       async () => ({ jobId: `job_${Math.random().toString(36).slice(2, 8)}`, status: "queued" }),
-      () => http<{ jobId: string; status: string }>(`/tests/${testId}/regenerate`, { method: "POST" }),
+      () =>
+        http<{ jobId: string; status: string }>(`/tests/${testId}/regenerate`, { method: "POST" }),
     );
   },
 };

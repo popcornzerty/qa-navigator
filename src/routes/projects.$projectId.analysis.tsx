@@ -20,7 +20,8 @@ export const Route = createFileRoute("/projects/$projectId/analysis")({
       { property: "og:title", content: "Repository analysis — AI QA Agent" },
       {
         property: "og:description",
-        content: "Pipeline states: repository, architecture, routes, components, APIs, features, stories, Gherkin.",
+        content:
+          "Pipeline states: repository, architecture, routes, components, APIs, features, stories, Gherkin.",
       },
     ],
   }),

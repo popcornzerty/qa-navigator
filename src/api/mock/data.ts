@@ -161,7 +161,7 @@ const seeds: StorySeed[] = [
       {
         scenario: "Successful login",
         given: ["I am on the login page"],
-        when: ['I enter valid credentials', 'I click "Login"'],
+        when: ["I enter valid credentials", 'I click "Login"'],
         then: ["I should be redirected to the dashboard"],
         status: "automated",
       },
@@ -195,7 +195,7 @@ const seeds: StorySeed[] = [
       {
         scenario: "Login with a wrong password",
         given: ["I am on the login page"],
-        when: ['I enter an invalid password', 'I click "Login"'],
+        when: ["I enter an invalid password", 'I click "Login"'],
         then: ['I should see the error "Invalid email or password"'],
         status: "automated",
       },
@@ -565,12 +565,54 @@ interface TestSeed {
 }
 
 const testSeeds: TestSeed[] = [
-  { storyKey: "US-101", scenarioIndex: 0, file: "tests/auth/login.spec.ts", status: "passed", lastRun: "2026-09-01T08:41:00Z", durationMs: 1200 },
-  { storyKey: "US-102", scenarioIndex: 0, file: "tests/auth/login-invalid.spec.ts", status: "passed", lastRun: "2026-09-01T08:41:00Z", durationMs: 940 },
-  { storyKey: "US-104", scenarioIndex: 0, file: "tests/catalog/filter-category.spec.ts", status: "passed", lastRun: "2026-09-01T08:42:00Z", durationMs: 1780 },
-  { storyKey: "US-104", scenarioIndex: 1, file: "tests/catalog/clear-filters.spec.ts", status: "passed", lastRun: "2026-09-01T08:42:00Z", durationMs: 1310 },
-  { storyKey: "US-105", scenarioIndex: 0, file: "tests/catalog/search.spec.ts", status: "skipped", lastRun: "2026-09-01T08:42:00Z", durationMs: 0 },
-  { storyKey: "US-106", scenarioIndex: 0, file: "tests/cart/add-to-cart.spec.ts", status: "passed", lastRun: "2026-09-01T08:43:00Z", durationMs: 1490 },
+  {
+    storyKey: "US-101",
+    scenarioIndex: 0,
+    file: "tests/auth/login.spec.ts",
+    status: "passed",
+    lastRun: "2026-09-01T08:41:00Z",
+    durationMs: 1200,
+  },
+  {
+    storyKey: "US-102",
+    scenarioIndex: 0,
+    file: "tests/auth/login-invalid.spec.ts",
+    status: "passed",
+    lastRun: "2026-09-01T08:41:00Z",
+    durationMs: 940,
+  },
+  {
+    storyKey: "US-104",
+    scenarioIndex: 0,
+    file: "tests/catalog/filter-category.spec.ts",
+    status: "passed",
+    lastRun: "2026-09-01T08:42:00Z",
+    durationMs: 1780,
+  },
+  {
+    storyKey: "US-104",
+    scenarioIndex: 1,
+    file: "tests/catalog/clear-filters.spec.ts",
+    status: "passed",
+    lastRun: "2026-09-01T08:42:00Z",
+    durationMs: 1310,
+  },
+  {
+    storyKey: "US-105",
+    scenarioIndex: 0,
+    file: "tests/catalog/search.spec.ts",
+    status: "skipped",
+    lastRun: "2026-09-01T08:42:00Z",
+    durationMs: 0,
+  },
+  {
+    storyKey: "US-106",
+    scenarioIndex: 0,
+    file: "tests/cart/add-to-cart.spec.ts",
+    status: "passed",
+    lastRun: "2026-09-01T08:43:00Z",
+    durationMs: 1490,
+  },
   {
     storyKey: "US-107",
     scenarioIndex: 0,
@@ -591,8 +633,22 @@ const testSeeds: TestSeed[] = [
     error:
       'expect(received).toContainText(expected)\nExpected: "Order confirmed"\nReceived: "Payment provider unavailable"',
   },
-  { storyKey: "US-109", scenarioIndex: 0, file: "tests/api/orders-list.spec.ts", status: "passed", lastRun: "2026-08-31T18:02:00Z", durationMs: 620 },
-  { storyKey: "US-109", scenarioIndex: 1, file: "tests/api/orders-unauthorized.spec.ts", status: "passed", lastRun: "2026-08-31T18:02:00Z", durationMs: 410 },
+  {
+    storyKey: "US-109",
+    scenarioIndex: 0,
+    file: "tests/api/orders-list.spec.ts",
+    status: "passed",
+    lastRun: "2026-08-31T18:02:00Z",
+    durationMs: 620,
+  },
+  {
+    storyKey: "US-109",
+    scenarioIndex: 1,
+    file: "tests/api/orders-unauthorized.spec.ts",
+    status: "passed",
+    lastRun: "2026-08-31T18:02:00Z",
+    durationMs: 410,
+  },
   {
     storyKey: "US-110",
     scenarioIndex: 0,
@@ -602,7 +658,14 @@ const testSeeds: TestSeed[] = [
     durationMs: 2870,
     error: "AssertionError: expected status 'in_transit' to equal 'shipped'",
   },
-  { storyKey: "US-112", scenarioIndex: 0, file: "tests/admin/assign-role.spec.ts", status: "not_run", lastRun: null, durationMs: 0 },
+  {
+    storyKey: "US-112",
+    scenarioIndex: 0,
+    file: "tests/admin/assign-role.spec.ts",
+    status: "not_run",
+    lastRun: null,
+    durationMs: 0,
+  },
 ];
 
 export const tests: PlaywrightTest[] = testSeeds.map((seed, index) => {
@@ -641,20 +704,50 @@ export const tests: PlaywrightTest[] = testSeeds.map((seed, index) => {
 });
 
 export const activity: ActivityEvent[] = [
-  { id: "ev-1", kind: "success", message: "Analysis completed on Atlas Commerce Storefront", at: "2026-09-01T09:14:00Z" },
+  {
+    id: "ev-1",
+    kind: "success",
+    message: "Analysis completed on Atlas Commerce Storefront",
+    at: "2026-09-01T09:14:00Z",
+  },
   { id: "ev-2", kind: "info", message: "12 User Stories approved", at: "2026-09-01T08:58:00Z" },
-  { id: "ev-3", kind: "success", message: "8 Playwright tests generated", at: "2026-09-01T08:12:00Z" },
-  { id: "ev-4", kind: "error", message: "3 tests failed on tests/checkout", at: "2026-09-01T07:44:00Z" },
-  { id: "ev-5", kind: "warning", message: "US-108 is out of sync with Jira ATL-561", at: "2026-08-31T19:20:00Z" },
+  {
+    id: "ev-3",
+    kind: "success",
+    message: "8 Playwright tests generated",
+    at: "2026-09-01T08:12:00Z",
+  },
+  {
+    id: "ev-4",
+    kind: "error",
+    message: "3 tests failed on tests/checkout",
+    at: "2026-09-01T07:44:00Z",
+  },
+  {
+    id: "ev-5",
+    kind: "warning",
+    message: "US-108 is out of sync with Jira ATL-561",
+    at: "2026-08-31T19:20:00Z",
+  },
 ];
 
 export const analysisSteps: AnalysisJob["steps"] = [
   { key: "repository", label: "Repository", status: "completed", detail: "318 files retrieved" },
-  { key: "architecture", label: "Architecture", status: "completed", detail: "React + TypeScript detected" },
+  {
+    key: "architecture",
+    label: "Architecture",
+    status: "completed",
+    detail: "React + TypeScript detected",
+  },
   { key: "routes", label: "Routes", status: "completed", detail: "24 routes mapped" },
   { key: "components", label: "Components", status: "completed", detail: "162 components indexed" },
   { key: "apis", label: "APIs", status: "completed", detail: "38 endpoints referenced" },
-  { key: "features", label: "Features", status: "running", detail: "Detecting functional features" },
+  {
+    key: "features",
+    label: "Features",
+    status: "running",
+    detail: "Detecting functional features",
+  },
   { key: "stories", label: "User Stories", status: "pending" },
   { key: "gherkin", label: "Gherkin", status: "pending" },
 ];

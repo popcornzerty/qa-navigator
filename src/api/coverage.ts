@@ -21,7 +21,8 @@ function buildReport(projectId?: string): CoverageReport {
           reason: automatedStoryIds.has(story.id)
             ? `${story.id} is automated but this criterion has no covering scenario.`
             : `${story.id} has no Playwright automation yet.`,
-          severity: story.status === "approved" || story.status === "created" ? "critical" : "warning",
+          severity:
+            story.status === "approved" || story.status === "created" ? "critical" : "warning",
         })),
     )
     .slice(0, 12);
