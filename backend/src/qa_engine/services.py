@@ -1,0 +1,613 @@
+"""Analysis pipeline and identifier allocation.
+
+The pipeline is expressed as an ordered list of steps whose state is persisted on the
+Analysis row, so the frontend's analysis screen reflects real backend progress instead of
+a simulation. Steps that are not implemented yet stay ``pending`` with an explicit reason
+rather than being reported as completed.
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from collections import Counter
+from datetime import datetime, timezone
+from pathlib import Path
+
+from sqlalchemy import delete, func, select
+from sqlalchemy.orm import Session
+
+from qa_engine import execution, generation, jira, playwright_gen
+from qa_engine.analyzer import extract_repository_metadata
+from qa_engine.config import settings
+from qa_engine.database import SessionLocal
+from qa_engine.features import group_symbols
+from qa_engine.repositories import GitCloneError, GitRepositoryProvider
+from qa_engine.models import (
+    AcceptanceCriterion,
+    Analysis,
+    Feature,
+    GherkinScenario,
+    PlaywrightTest,
+    Project,
+    UserStory,
+)
+from qa_engine.ollama import OllamaError
+
+logger = logging.getLogger(__name__)
+
+STEPS: list[tuple[str, str]] = [
+    ("repository", "Repository"),
+    ("architecture", "Architecture"),
+    ("routes", "Routes"),
+    ("components", "Components"),
+    ("apis", "APIs"),
+    ("features", "Features"),
+    ("stories", "User Stories"),
+    ("gherkin", "Gherkin"),
+]
+
+
+def initial_steps() -> list[dict]:
+    return [{"key": key, "label": label, "status": "pending"} for key, label in STEPS]
+
+
+def next_reference(db: Session, model, prefix: str, width: int = 3) -> str:
+    """Allocate the next human-readable identifier, e.g. ``US-004``.
+
+    Readable ids matter here: they are what appears in Jira, in generated ``.spec.ts``
+    file headers and in traceability reports.
+    """
+    count = db.scalar(select(func.count()).select_from(model)) or 0
+    candidate = count + 1
+    while db.get(model, f"{prefix}-{candidate:0{width}d}") is not None:
+        candidate += 1
+    return f"{prefix}-{candidate:0{width}d}"
+
+
+def _detect_stack(repository_path: str, extensions: dict[str, int]) -> str:
+    root = Path(repository_path)
+    package_json = root / "package.json"
+    hints: list[str] = []
+    if package_json.is_file():
+        try:
+            content = package_json.read_text(encoding="utf-8")
+        except OSError:
+            content = ""
+        for name, libel in (
+            ('"react"', "React"),
+            ('"next"', "Next.js"),
+            ('"vue"', "Vue"),
+            ('"@angular/core"', "Angular"),
+            ('"svelte"', "Svelte"),
+            ('"@tanstack/react-router"', "TanStack Router"),
+            ('"vite"', "Vite"),
+            ('"playwright"', "Playwright"),
+        ):
+            if name in content:
+                hints.append(libel)
+    if ".ts" in extensions or ".tsx" in extensions:
+        hints.append("TypeScript")
+    return " + ".join(dict.fromkeys(hints)) or "Stack non identifiée"
+
+
+class _StepWriter:
+    """Persists step transitions so a polling client sees progress as it happens."""
+
+    def __init__(self, db: Session, analysis: Analysis):
+        self.db = db
+        self.analysis = analysis
+        self.steps = initial_steps()
+        self._flush()
+
+    def _flush(self) -> None:
+        completed = sum(1 for step in self.steps if step["status"] == "completed")
+        self.analysis.steps = [dict(step) for step in self.steps]
+        self.analysis.progress = round(completed / len(self.steps) * 100)
+        self.db.commit()
+
+    def start(self, key: str) -> None:
+        for step in self.steps:
+            if step["key"] == key:
+                step["status"] = "running"
+        self._flush()
+
+    def complete(self, key: str, detail: str) -> None:
+        for step in self.steps:
+            if step["key"] == key:
+                step.update(status="completed", detail=detail)
+        self._flush()
+
+    def skip(self, key: str, detail: str) -> None:
+        for step in self.steps:
+            if step["key"] == key:
+                step.update(status="pending", detail=detail)
+        self._flush()
+
+    def fail(self, key: str, detail: str) -> None:
+        for step in self.steps:
+            if step["key"] == key:
+                step.update(status="failed", detail=detail)
+        self._flush()
+
+
+def _discard_untouched_stories(db: Session, project_id: str) -> None:
+    """Drop previously generated stories that nobody has reviewed yet.
+
+    Anything a human has touched — approved, edited, pushed to Jira, or imported — is a
+    deliberate artefact and survives re-analysis. Only untouched drafts are regenerated.
+    """
+    stale = list(
+        db.scalars(
+            select(UserStory).where(
+                UserStory.project_id == project_id,
+                UserStory.origin == "generated",
+                UserStory.story_status == "draft",
+            )
+        )
+    )
+    for story in stale:
+        db.execute(delete(GherkinScenario).where(GherkinScenario.user_story_id == story.id))
+        db.execute(delete(AcceptanceCriterion).where(AcceptanceCriterion.user_story_id == story.id))
+        db.delete(story)
+    db.commit()
+
+
+def _generate_backlog(db: Session, project: Project, writer: "_StepWriter") -> str | None:
+    """Generate User Stories then Gherkin for every detected feature.
+
+    Returns an error message when generation could not run, in which case the affected
+    steps are marked failed and the analysis keeps the deterministic results it produced.
+    """
+    if not settings.generation_enabled:
+        writer.skip("stories", "Génération désactivée (GENERATION_ENABLED=false)")
+        writer.skip("gherkin", "Génération désactivée (GENERATION_ENABLED=false)")
+        return None
+
+    features = list(
+        db.scalars(
+            select(Feature)
+            .where(Feature.project_id == project.id)
+            .order_by(Feature.confidence.desc())
+        )
+    )
+    total_features = len(features)
+    if settings.generation_max_features > 0:
+        features = features[: settings.generation_max_features]
+
+    writer.start("stories")
+    started = time.monotonic()
+    _discard_untouched_stories(db, project.id)
+
+    created: list[UserStory] = []
+    contexts: dict[str, generation.FeatureContext] = {}
+    try:
+        for feature in features:
+            context = generation.build_context(feature, project.repository_path)
+            contexts[feature.id] = context
+            for draft in generation.generate_stories(context):
+                story = UserStory(
+                    id=next_reference(db, UserStory, "US"),
+                    project_id=project.id,
+                    feature_id=feature.id,
+                    feature_name=feature.name,
+                    epic=draft.epic,
+                    title=draft.title,
+                    description=draft.description,
+                    # Confidence is evidence-based, never asked of the model.
+                    confidence=feature.confidence,
+                    source_files=feature.source_files,
+                    origin="generated",
+                    story_status="draft",
+                )
+                db.add(story)
+                db.flush()
+                for index, text in enumerate(draft.acceptance_criteria, start=1):
+                    db.add(
+                        AcceptanceCriterion(
+                            id=f"{story.id}-AC-{index:02d}",
+                            user_story_id=story.id,
+                            text=text,
+                            covered=False,
+                        )
+                    )
+                created.append(story)
+            db.commit()
+    except OllamaError as exc:
+        db.commit()
+        message = str(exc)
+        logger.warning("Story generation stopped: %s", message)
+        writer.fail("stories", f"Génération interrompue : {message[:160]}")
+        writer.fail("gherkin", "Non exécuté : la génération des User Stories a échoué")
+        return message
+
+    scope = (
+        f"{len(features)}/{total_features} domaines"
+        if len(features) < total_features
+        else f"{total_features} domaines"
+    )
+    writer.complete(
+        "stories",
+        f"{len(created)} User Stories sur {scope} — {generation.describe_engine()} "
+        f"en {time.monotonic() - started:.0f}s",
+    )
+
+    writer.start("gherkin")
+    started = time.monotonic()
+    scenario_count = 0
+    try:
+        for story in created:
+            context = contexts.get(story.feature_id or "")
+            if context is None:
+                continue
+            draft = generation.GeneratedStory(
+                title=story.title,
+                description=story.description,
+                epic=story.epic,
+                acceptance_criteria=[item.text for item in story.acceptance_criteria],
+            )
+            for index, item in enumerate(generation.generate_scenarios(context, draft), start=1):
+                db.add(
+                    GherkinScenario(
+                        id=f"{story.id}-SC-{index}",
+                        user_story_id=story.id,
+                        project_id=project.id,
+                        feature=story.feature_name,
+                        scenario=item.scenario,
+                        given=item.given,
+                        when=item.when,
+                        then=item.then,
+                        scenario_status="draft",
+                    )
+                )
+                scenario_count += 1
+            db.commit()
+    except OllamaError as exc:
+        db.commit()
+        message = str(exc)
+        logger.warning("Gherkin generation stopped: %s", message)
+        writer.fail("gherkin", f"Génération interrompue : {message[:160]}")
+        return message
+
+    writer.complete(
+        "gherkin", f"{scenario_count} scénarios générés en {time.monotonic() - started:.0f}s"
+    )
+    return None
+
+
+
+def _sync_working_copy(project: Project) -> str | None:
+    """Refresh the working copy for git projects. Returns the checked-out revision."""
+    if project.provider != "github" or not project.repository_url:
+        return None
+    provider = GitRepositoryProvider(
+        project.repository_url, project.branch, settings.clone_root
+    )
+    provider.sync()
+    # The slug is deterministic, but a project created before a URL change would still
+    # point at the old directory; keep the row aligned with what was actually cloned.
+    project.repository_path = str(provider.root)
+    return provider.head_revision()
+
+
+def run_analysis(analysis_id: str) -> None:
+    """In-process job runner, deliberately replaceable by Celery/RQ later."""
+    db = SessionLocal()
+    try:
+        analysis = db.get(Analysis, analysis_id)
+        if not analysis:
+            return
+        project = db.get(Project, analysis.project_id)
+        if not project:
+            analysis.status, analysis.error = "failed", "Project no longer exists"
+            db.commit()
+            return
+
+        analysis.status = "running"
+        project.project_status = "analyzing"
+        db.commit()
+
+        writer = _StepWriter(db, analysis)
+
+        writer.start("repository")
+        try:
+            revision = _sync_working_copy(project)
+        except GitCloneError as exc:
+            # A clone failure is about the repository, not about the engine: name the
+            # failing step and the reason instead of surfacing a bare stack trace.
+            writer.fail("repository", str(exc)[:200])
+            analysis.status = "failed"
+            analysis.error = str(exc)
+            analysis.completed_at = datetime.now(timezone.utc)
+            project.project_status = "error"
+            db.commit()
+            return
+        summary, symbols = extract_repository_metadata(project.repository_path)
+        detail = f"{summary['files_scanned']} fichiers analysés"
+        if revision:
+            detail = f"{detail} · {project.branch}@{revision}"
+        writer.complete("repository", detail)
+
+        writer.start("architecture")
+        stack = _detect_stack(project.repository_path, summary["file_extensions"])
+        writer.complete("architecture", stack)
+
+        counts = Counter(symbol.kind for symbol in symbols)
+        writer.start("routes")
+        writer.complete("routes", f"{counts['route']} routes détectées")
+        writer.start("components")
+        writer.complete("components", f"{counts['component']} composants indexés")
+        writer.start("apis")
+        writer.complete("apis", f"{counts['api_call']} appels API référencés")
+
+        writer.start("features")
+        discovered = group_symbols(symbols)
+        db.execute(delete(Feature).where(Feature.project_id == project.id))
+        db.add_all(
+            [
+                Feature(
+                    project_id=project.id,
+                    analysis_id=analysis.id,
+                    key=feature.key,
+                    name=feature.name,
+                    description=feature.description,
+                    confidence=feature.confidence,
+                    source_files=feature.source_files,
+                    evidence={
+                        "routes": feature.routes,
+                        "components": feature.components,
+                        "api_calls": feature.api_calls,
+                        "test_ids": feature.test_ids,
+                        "has_form": feature.has_form,
+                    },
+                )
+                for feature in discovered
+            ]
+        )
+        db.commit()
+        writer.complete("features", f"{len(discovered)} domaines fonctionnels")
+
+        generation_error = _generate_backlog(db, project, writer)
+
+        summary["stack"] = stack
+        summary["features_detected"] = len(discovered)
+        if generation_error:
+            analysis.error = generation_error
+        analysis.summary = summary
+        analysis.status = "completed"
+        analysis.completed_at = datetime.now(timezone.utc)
+        project.project_status = "ready"
+        project.last_analysis = analysis.completed_at
+        db.commit()
+    except Exception as exc:  # Persist the failure so the UI can report it via polling.
+        logger.exception("Analysis %s failed", analysis_id)
+        db.rollback()
+        analysis = db.get(Analysis, analysis_id)
+        if analysis:
+            analysis.status = "failed"
+            analysis.error = str(exc)
+            analysis.completed_at = datetime.now(timezone.utc)
+            project = db.get(Project, analysis.project_id)
+            if project:
+                project.project_status = "error"
+            db.commit()
+    finally:
+        db.close()
+
+
+def spec_directory(project: Project) -> Path:
+    """Where generated specs are written: inside the analysed repository.
+
+    The specs live next to the code they exercise so the project's own
+    ``playwright.config.ts`` picks them up and a run behaves exactly like CI. This does
+    write into the user's git tree — generated files carry a header saying so, and
+    regeneration overwrites them.
+    """
+    configured = (project.playwright_config or {}).get("testDirectory") or "tests"
+    directory = Path(project.repository_path) / configured
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def generate_playwright_for_scenario(scenario_id: str) -> None:
+    """Generate, validate and persist one ``.spec.ts`` for a Gherkin scenario."""
+    db = SessionLocal()
+    try:
+        scenario = db.get(GherkinScenario, scenario_id)
+        if not scenario:
+            return
+        story = db.get(UserStory, scenario.user_story_id)
+        project = db.get(Project, scenario.project_id)
+        if not story or not project:
+            return
+
+        feature = db.get(Feature, story.feature_id) if story.feature_id else None
+        if feature is None:
+            logger.warning("Scenario %s has no feature; cannot ground selectors", scenario_id)
+            return
+
+        context = generation.build_context(feature, project.repository_path)
+        base_url = (project.playwright_config or {}).get("baseUrl") or "http://localhost:8080"
+
+        spec = playwright_gen.generate_spec(
+            context,
+            story_id=story.id,
+            story_title=story.title,
+            scenario_id=scenario.id,
+            scenario_name=scenario.scenario,
+            given=scenario.given or [],
+            when=scenario.when or [],
+            then=scenario.then or [],
+            base_url=base_url,
+        )
+
+        directory = spec_directory(project)
+        path = directory / spec.file_name
+        path.write_text(spec.source, encoding="utf-8")
+
+        existing = db.scalar(
+            select(PlaywrightTest).where(PlaywrightTest.gherkin_scenario_id == scenario.id)
+        )
+        relative = f"{(project.playwright_config or {}).get('testDirectory') or 'tests'}/{spec.file_name}"
+        if existing is None:
+            existing = PlaywrightTest(
+                id=next_reference(db, PlaywrightTest, "pw"),
+                project_id=project.id,
+                user_story_id=story.id,
+                gherkin_scenario_id=scenario.id,
+            )
+            db.add(existing)
+        existing.scenario = scenario.scenario
+        existing.file = relative
+        existing.source = spec.source
+        existing.test_status = "not_run"
+        existing.result = {
+            "status": "not_run",
+            "executed_at": None,
+            "duration_ms": 0,
+            "console_output": spec.unresolved or None,
+        }
+        scenario.scenario_status = "automated"
+        db.commit()
+
+        if spec.unresolved:
+            logger.warning(
+                "Spec %s generated with %d unresolved step(s)", spec.file_name, len(spec.unresolved)
+            )
+    except OllamaError as exc:
+        db.rollback()
+        logger.warning("Playwright generation failed for %s: %s", scenario_id, exc)
+    except Exception:
+        db.rollback()
+        logger.exception("Playwright generation crashed for %s", scenario_id)
+    finally:
+        db.close()
+
+
+def run_playwright_test(test_id: str) -> None:
+    """Execute one generated spec and persist its result."""
+    db = SessionLocal()
+    try:
+        test = db.get(PlaywrightTest, test_id)
+        if not test:
+            return
+        project = db.get(Project, test.project_id)
+        if not project:
+            return
+
+        base_url = (project.playwright_config or {}).get("baseUrl") or "http://localhost:8080"
+        try:
+            outcome = execution.run_spec(project.repository_path, test.file, base_url=base_url)
+        except execution.ExecutionError as exc:
+            # The runner never started: that is a failure of the run, not of the test.
+            logger.warning("Execution of %s could not start: %s", test_id, exc)
+            test.result = {
+                "status": test.test_status,
+                "executed_at": None,
+                "duration_ms": 0,
+                "error_message": str(exc),
+                "console_output": None,
+            }
+            db.commit()
+            return
+
+        # Naive UTC, matching the other timestamp columns. Mixing an aware ISO string
+        # in `result` with a naive column made the same run show two different times.
+        executed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        test.test_status = outcome.status
+        test.last_run = executed_at
+        test.duration_ms = outcome.duration_ms
+        test.result = {
+            "status": outcome.status,
+            "executed_at": executed_at.isoformat(),
+            "duration_ms": outcome.duration_ms,
+            "error_message": outcome.error_message,
+            "screenshot": outcome.screenshot,
+            "trace": outcome.trace,
+            "console_output": outcome.console_output or None,
+        }
+
+        # A passing scenario is covered: reflect it on its acceptance criteria.
+        if outcome.status == "passed":
+            story = db.get(UserStory, test.user_story_id)
+            if story:
+                for criterion in story.acceptance_criteria:
+                    criterion.covered = True
+        db.commit()
+        logger.info("Test %s finished: %s in %dms", test_id, outcome.status, outcome.duration_ms)
+    except Exception:
+        db.rollback()
+        logger.exception("Execution crashed for %s", test_id)
+    finally:
+        db.close()
+
+
+def default_jira_jql(project: Project) -> str:
+    if not project.jira_project:
+        raise ValueError(
+            "Aucune clé de projet Jira n'est configurée. Renseignez-la dans les "
+            "paramètres du projet, ou fournissez une requête JQL explicite."
+        )
+    return f'project = "{project.jira_project}" AND issuetype = Story ORDER BY created DESC'
+
+
+def import_jira_stories(
+    db: Session, project: Project, jql: str, max_results: int
+) -> tuple[list[str], list[str]]:
+    """Import Jira issues as User Stories. Returns ``(created_ids, updated_ids)``.
+
+    Re-importing is non-destructive: an existing story is refreshed, and criteria are
+    added rather than replaced, so local edits are never silently discarded.
+    """
+    issues = jira.search_issues(jql, max_results=max_results)
+    created: list[str] = []
+    updated: list[str] = []
+
+    for issue in issues:
+        if not issue.key or not issue.summary:
+            continue
+        story = db.scalar(
+            select(UserStory).where(
+                UserStory.project_id == project.id, UserStory.jira_key == issue.key
+            )
+        )
+        if story is None:
+            story = UserStory(
+                id=next_reference(db, UserStory, "US"),
+                project_id=project.id,
+                jira_key=issue.key,
+                origin="jira",
+                # An imported story is a fact, not an inference: full confidence.
+                confidence=1.0,
+                source_files=[],
+                story_status="created",
+            )
+            db.add(story)
+            created.append(story.id)
+        else:
+            updated.append(story.id)
+
+        story.title = issue.summary
+        story.description = issue.description
+        story.epic = issue.epic or story.epic
+        story.feature_name = story.feature_name or "Import Jira"
+        db.flush()
+
+        existing = {item.text.strip().lower() for item in story.acceptance_criteria}
+        position = len(story.acceptance_criteria)
+        for text in issue.acceptance_criteria:
+            if text.strip().lower() in existing:
+                continue
+            position += 1
+            db.add(
+                AcceptanceCriterion(
+                    id=f"{story.id}-AC-{position:02d}",
+                    user_story_id=story.id,
+                    text=text,
+                    covered=False,
+                )
+            )
+            existing.add(text.strip().lower())
+
+    db.commit()
+    return created, updated

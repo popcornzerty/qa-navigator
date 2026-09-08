@@ -1,0 +1,270 @@
+"""User Story and Gherkin generation from analysed code, using the local Ollama runtime.
+
+Division of labour, on purpose:
+
+* **Deterministic** — which files exist, which routes and components they declare, which
+  ``data-testid`` anchors are available, and the confidence score. This comes from the
+  analyzer and is never delegated to a model.
+* **Generated** — only the natural-language layer: the story wording, its acceptance
+  criteria and the Gherkin steps.
+
+A story therefore always traces back to real evidence, and a hallucinated route cannot
+enter the backlog: source files and confidence are copied from the feature, not invented.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from qa_engine import ollama
+from qa_engine.config import settings
+
+logger = logging.getLogger(__name__)
+
+MAX_STORIES_PER_FEATURE = 3
+MAX_CRITERIA_PER_STORY = 4
+MAX_SCENARIOS_PER_STORY = 2
+MAX_EXCERPT_FILES = 2
+MAX_EXCERPT_CHARS = 1200
+
+SYSTEM_PROMPT = (
+    "Tu es analyste QA fonctionnel. Tu écris des User Stories et des scénarios Gherkin "
+    "en français, à partir de faits extraits d'un code source. "
+    "Tu ne décris que des comportements réellement observables par un utilisateur. "
+    "Tu n'inventes jamais de route, de champ ou d'écran qui ne figure pas dans les faits "
+    "fournis. Tu restes concret, court et testable. Aucun jargon technique inutile."
+)
+
+STORY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "epic": {"type": "string"},
+        "stories": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "titre": {"type": "string"},
+                    "description": {"type": "string"},
+                    "criteres_acceptation": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                },
+                "required": ["titre", "description", "criteres_acceptation"],
+            },
+        },
+    },
+    "required": ["epic", "stories"],
+}
+
+SCENARIO_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "scenarios": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "scenario": {"type": "string"},
+                    "etant_donne": {"type": "array", "items": {"type": "string"}},
+                    "quand": {"type": "array", "items": {"type": "string"}},
+                    "alors": {"type": "array", "items": {"type": "string"}},
+                },
+                "required": ["scenario", "etant_donne", "quand", "alors"],
+            },
+        }
+    },
+    "required": ["scenarios"],
+}
+
+
+@dataclass
+class GeneratedStory:
+    title: str
+    description: str
+    epic: str
+    acceptance_criteria: list[str] = field(default_factory=list)
+
+
+@dataclass
+class GeneratedScenario:
+    scenario: str
+    given: list[str] = field(default_factory=list)
+    when: list[str] = field(default_factory=list)
+    then: list[str] = field(default_factory=list)
+
+
+@dataclass
+class FeatureContext:
+    """Everything the model is allowed to reason about for one functional domain."""
+
+    name: str
+    description: str
+    routes: list[str]
+    components: list[str]
+    api_calls: list[str]
+    test_ids: list[str]
+    has_form: bool
+    source_files: list[str]
+    excerpts: list[tuple[str, str]] = field(default_factory=list)
+
+    def as_prompt_block(self) -> str:
+        lines = [
+            f"DOMAINE FONCTIONNEL : {self.name}",
+            f"Résumé de l'analyse statique : {self.description}",
+            "",
+            f"Routes exposées : {', '.join(self.routes) if self.routes else 'aucune'}",
+            f"Composants : {', '.join(self.components[:20]) if self.components else 'aucun'}",
+            f"Appels API : {', '.join(self.api_calls) if self.api_calls else 'aucun'}",
+            f"Formulaire présent : {'oui' if self.has_form else 'non'}",
+        ]
+        if self.test_ids:
+            lines.append(f"Ancres de test (data-testid) : {', '.join(self.test_ids[:25])}")
+        if self.excerpts:
+            lines.append("")
+            lines.append("EXTRAITS DE CODE :")
+            for path, content in self.excerpts:
+                lines.append(f"--- {path} ---")
+                lines.append(content)
+        return "\n".join(lines)
+
+
+def build_context(feature_row, repository_path: str) -> FeatureContext:
+    """Assemble the evidence block for one feature, including trimmed source excerpts."""
+    evidence = feature_row.evidence or {}
+    source_files = feature_row.source_files or []
+    root = Path(repository_path)
+
+    excerpts: list[tuple[str, str]] = []
+    for relative in source_files[:MAX_EXCERPT_FILES]:
+        candidate = root / relative
+        try:
+            content = candidate.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        excerpts.append((relative, content[:MAX_EXCERPT_CHARS]))
+
+    return FeatureContext(
+        name=feature_row.name,
+        description=feature_row.description,
+        routes=evidence.get("routes", []),
+        components=evidence.get("components", []),
+        api_calls=evidence.get("api_calls", []),
+        test_ids=evidence.get("test_ids", []),
+        has_form=bool(evidence.get("has_form")),
+        source_files=source_files,
+        excerpts=excerpts,
+    )
+
+
+def generate_stories(context: FeatureContext) -> list[GeneratedStory]:
+    """Ask the local model for the User Stories covering one functional domain."""
+    prompt = (
+        f"{context.as_prompt_block()}\n\n"
+        f"Rédige au maximum {MAX_STORIES_PER_FEATURE} User Stories couvrant ce domaine.\n"
+        "Chaque User Story doit :\n"
+        '- avoir un titre court à l\'impératif ou à l\'infinitif (ex : "Filtrer les projets par statut") ;\n'
+        '- avoir une description au format "En tant que <rôle>, je veux <action> afin de <bénéfice>." ;\n'
+        f"- lister entre 2 et {MAX_CRITERIA_PER_STORY} critères d'acceptation, chacun étant une "
+        "affirmation vérifiable, au présent, sans « devrait ».\n"
+        "Donne aussi le nom de l'epic regroupant ces stories.\n"
+        "N'invente aucune fonctionnalité absente des faits ci-dessus.\n"
+        "Interdits dans les critères : URL, chemin de route, sélecteur CSS, nom de "
+        "composant, nom de fichier, titre d'onglet du navigateur, intervalle de "
+        "rafraîchissement, et tout détail interne invisible pour l'utilisateur. Désigne "
+        'les écrans par leur nom métier (« la page de détail du projet », pas '
+        '« /projects/$id »).\n'
+        "Rédige un français correct : les critères commencent par un groupe nominal ou un "
+        "verbe conjugué (« Le bouton Analyser est visible »), jamais par un infinitif "
+        "déformé."
+    )
+    payload = ollama.chat_json(SYSTEM_PROMPT, prompt, STORY_SCHEMA)
+
+    epic = str(payload.get("epic") or context.name).strip()
+    stories: list[GeneratedStory] = []
+    for raw in payload.get("stories", [])[:MAX_STORIES_PER_FEATURE]:
+        title = str(raw.get("titre", "")).strip()
+        if not title:
+            continue
+        criteria = [
+            str(item).strip()
+            for item in raw.get("criteres_acceptation", [])
+            if str(item).strip()
+        ][:MAX_CRITERIA_PER_STORY]
+        stories.append(
+            GeneratedStory(
+                title=title,
+                description=str(raw.get("description", "")).strip(),
+                epic=epic,
+                acceptance_criteria=criteria,
+            )
+        )
+    return stories
+
+
+def generate_scenarios(context: FeatureContext, story: GeneratedStory) -> list[GeneratedScenario]:
+    """Turn one story and its criteria into Gherkin scenarios."""
+    criteria = "\n".join(f"- {item}" for item in story.acceptance_criteria) or "- (aucun)"
+    anchors = (
+        f"Ancres de test disponibles : {', '.join(context.test_ids[:25])}\n"
+        if context.test_ids
+        else ""
+    )
+    prompt = (
+        f"{context.as_prompt_block()}\n\n"
+        f"USER STORY : {story.title}\n"
+        f"{story.description}\n\n"
+        f"CRITÈRES D'ACCEPTATION :\n{criteria}\n\n"
+        f"{anchors}"
+        f"Écris 1 à {MAX_SCENARIOS_PER_STORY} scénarios Gherkin couvrant ces critères.\n"
+        "Contraintes :\n"
+        "- **un seul scénario suffit** si la story n'a qu'un seul chemin. N'ajoute un "
+        "deuxième scénario que s'il teste un cas réellement différent (erreur, cas limite, "
+        "donnée absente). Ne duplique jamais un scénario en changeant seulement son titre ;\n"
+        "- « étant donné » = état initial, « quand » = **uniquement l'action de "
+        "l'utilisateur**, « alors » = **uniquement le résultat observé**. Ne mets jamais un "
+        "résultat dans « quand » ;\n"
+        "- chaque étape est une phrase courte à l'infinitif ou au présent, sans « je » ;\n"
+        "- interdits : URL, chemin de route, sélecteur CSS, nom de composant, nom de "
+        "fichier, titre d'onglet du navigateur. Désigne les écrans par leur nom métier "
+        '(« la page de détail du projet », pas « /projects/$id »).'
+    )
+    payload = ollama.chat_json(SYSTEM_PROMPT, prompt, SCENARIO_SCHEMA)
+
+    scenarios: list[GeneratedScenario] = []
+    seen: set[tuple[str, ...]] = set()
+    for raw in payload.get("scenarios", [])[:MAX_SCENARIOS_PER_STORY]:
+        name = str(raw.get("scenario", "")).strip()
+        if not name:
+            continue
+        candidate = GeneratedScenario(
+            scenario=name,
+            given=[str(x).strip() for x in raw.get("etant_donne", []) if str(x).strip()],
+            when=[str(x).strip() for x in raw.get("quand", []) if str(x).strip()],
+            then=[str(x).strip() for x in raw.get("alors", []) if str(x).strip()],
+        )
+        # Small models pad up to the requested count by restating the same scenario under
+        # a new title. Identical steps mean one scenario, whatever the title says.
+        fingerprint = _fingerprint(candidate)
+        if fingerprint in seen:
+            logger.info("Dropping duplicate scenario %r", name)
+            continue
+        seen.add(fingerprint)
+        scenarios.append(candidate)
+    return scenarios
+
+
+def _fingerprint(scenario: GeneratedScenario) -> tuple[str, ...]:
+    """Title-independent identity of a scenario: its normalised steps."""
+
+    def normalise(step: str) -> str:
+        return " ".join(step.lower().replace("'", " ").split()).rstrip(".")
+
+    return tuple(normalise(step) for step in (*scenario.given, *scenario.when, *scenario.then))
+
+
+def describe_engine() -> str:
+    return f"{settings.ollama_model} ({settings.generation_language})"
