@@ -1,5 +1,40 @@
 # QA Navigator
 
+Frontend of **AI QA Agent**: analyse a repository, review the generated User Stories and
+Gherkin, run the Playwright suite, and measure QA coverage.
+
+## Getting started
+
+```bash
+npm install
+cp .env.example .env.local     # copy .env.example .env.local  (Windows)
+npm run dev                    # http://localhost:8080
+```
+
+The UI talks to the **QA engine**, an independent FastAPI service that must be running
+separately (`uvicorn qa_engine.main:app --app-dir src`, on port 8000 by default). Its
+`CORS_ORIGINS` must list `http://localhost:8080`, and it is restarted for `.env` changes
+to take effect.
+
+To work on the UI without a backend, set `VITE_API_MODE=mock` in `.env.local`: every
+screen then runs on the Phase 1 in-memory fixtures.
+
+## Playwright
+
+Generated specs land in `tests/` and run with the project's own config:
+
+```bash
+npx playwright test
+```
+
+`@playwright/test` and Chromium are already declared; `npx playwright install chromium`
+downloads the browser on a fresh machine. `PLAYWRIGHT_BASE_URL` overrides the target
+origin; the config reuses a dev server that is already listening.
+
+---
+
+## Original Phase 1 specification
+
 AI QA Agent — Phase 1: Frontend Foundation
 
 Build the frontend foundation of a SaaS-ready application called AI QA Agent.
