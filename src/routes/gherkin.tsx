@@ -177,15 +177,27 @@ function GherkinPage() {
       />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Features" value={`${stats.features}`} hint="distinct Gherkin features" />
-        <MetricCard label="Scenarios" value={`${stats.scenarios}`} hint={`${stats.valid} valid`} />
         <MetricCard
+          testId="metric-features"
+          label="Features"
+          value={`${stats.features}`}
+          hint="distinct Gherkin features"
+        />
+        <MetricCard
+          testId="metric-scenarios"
+          label="Scenarios"
+          value={`${stats.scenarios}`}
+          hint={`${stats.valid} valid`}
+        />
+        <MetricCard
+          testId="metric-coverage"
           label="Coverage"
           value={percent(stats.coverage)}
           hint={`${stats.automated} automated`}
           progress={stats.coverage}
         />
         <MetricCard
+          testId="metric-validation"
           label="Validation"
           value={`${stats.valid}/${stats.scenarios}`}
           hint="scenarios validated"

@@ -68,27 +68,32 @@ function Dashboard() {
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         <MetricCard
+          testId="metric-projects"
           label="Projects"
           value={String(data?.projects ?? "—")}
           hint={`${data?.activeProjects ?? 0} active`}
         />
         <MetricCard
+          testId="metric-user-stories"
           label="User stories"
           value={String(data?.userStories ?? "—")}
           hint={`${data?.approvedStories ?? 0} approved`}
         />
         <MetricCard
+          testId="metric-gherkin"
           label="Gherkin"
           value={String(data?.gherkinScenarios ?? "—")}
           hint={`${data?.validGherkin ?? 0} valid`}
         />
         <MetricCard
+          testId="metric-tests"
           label="Tests"
           value={String(data?.automatedTests ?? "—")}
           hint={`${data?.failingTests ?? 0} failed`}
           tone={data && data.failingTests > 0 ? "fail" : "default"}
         />
         <MetricCard
+          testId="metric-coverage"
           label="Coverage"
           value={data ? percent(data.coverage) : "—"}
           progress={data?.coverage ?? 0}
@@ -102,14 +107,15 @@ function Dashboard() {
             title="Analysis Pipeline"
             meta={job.data ? `run ${job.data.jobId}` : "loading"}
             actions={
-              <Link
-                to="/projects/$projectId/analysis"
-                params={{ projectId: projectId ?? "prj-atlas-store" }}
-              >
-                <Button variant="outline" size="sm">
-                  Open workflow
-                </Button>
-              </Link>
+              // No project, no workflow to open: linking to a placeholder id would only
+              // lead to a 404.
+              projectId ? (
+                <Link to="/projects/$projectId/analysis" params={{ projectId }}>
+                  <Button variant="outline" size="sm" data-testid="open-workflow">
+                    Open workflow
+                  </Button>
+                </Link>
+              ) : null
             }
           />
           {job.data ? (

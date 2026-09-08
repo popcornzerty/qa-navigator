@@ -81,11 +81,13 @@ function CoveragePage() {
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard
+          testId="metric-user-stories"
           label="User Stories"
           value={`${report.userStories.total}`}
           hint={`${report.userStories.withGherkin} with Gherkin · ${report.userStories.automated} automated`}
         />
         <MetricCard
+          testId="metric-acceptance-criteria"
           label="Acceptance Criteria"
           value={`${report.acceptanceCriteria.total}`}
           hint={`${report.acceptanceCriteria.covered} covered`}
@@ -96,12 +98,14 @@ function CoveragePage() {
           }
         />
         <MetricCard
+          testId="metric-automated-tests"
           label="Automated tests"
           value={`${report.automation.total}`}
           hint={`${report.automation.passing} passing`}
           tone="pass"
         />
         <MetricCard
+          testId="metric-coverage"
           label="Coverage"
           value={percent(report.coverage)}
           hint="acceptance criteria covered"

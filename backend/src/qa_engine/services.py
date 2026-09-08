@@ -644,3 +644,81 @@ def import_jira_stories(
 
     db.commit()
     return created, updated
+
+
+def regenerate_gherkin_for_story(story_id: str) -> None:
+    """Rebuild one story's Gherkin from the current analysis and prompts.
+
+    Scenarios are replaced, not merged: a story whose wording or criteria changed needs a
+    coherent set, and keeping stale scenarios alongside fresh ones would leave the backlog
+    describing two different behaviours.
+
+    Playwright tests derived from the replaced scenarios are removed with them — including
+    their spec files. A test asserting a scenario that no longer exists is worse than no
+    test: it still runs, and still reports green.
+    """
+    db = SessionLocal()
+    try:
+        story = db.get(UserStory, story_id)
+        if not story:
+            return
+        project = db.get(Project, story.project_id)
+        feature = db.get(Feature, story.feature_id) if story.feature_id else None
+        if not project or feature is None:
+            logger.warning("Story %s has no analysed feature; re-run an analysis first", story_id)
+            return
+
+        context = generation.build_context(feature, project.repository_path)
+        draft = generation.GeneratedStory(
+            title=story.title,
+            description=story.description,
+            epic=story.epic,
+            acceptance_criteria=[item.text for item in story.acceptance_criteria],
+        )
+        scenarios = generation.generate_scenarios(context, draft)
+        if not scenarios:
+            logger.warning("No scenario generated for %s; keeping the existing ones", story_id)
+            return
+
+        obsolete = list(
+            db.scalars(select(PlaywrightTest).where(PlaywrightTest.user_story_id == story.id))
+        )
+        for test in obsolete:
+            spec = Path(project.repository_path) / test.file
+            try:
+                spec.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Could not remove the obsolete spec %s", spec)
+            db.delete(test)
+        db.execute(delete(GherkinScenario).where(GherkinScenario.user_story_id == story.id))
+        db.flush()
+
+        for index, item in enumerate(scenarios, start=1):
+            db.add(
+                GherkinScenario(
+                    id=f"{story.id}-SC-{index}",
+                    user_story_id=story.id,
+                    project_id=project.id,
+                    feature=story.feature_name,
+                    scenario=item.scenario,
+                    given=item.given,
+                    when=item.when,
+                    then=item.then,
+                    scenario_status="draft",
+                )
+            )
+        db.commit()
+        logger.info(
+            "Regenerated %d scenarios for %s (%d obsolete tests removed)",
+            len(scenarios),
+            story_id,
+            len(obsolete),
+        )
+    except OllamaError as exc:
+        db.rollback()
+        logger.warning("Gherkin regeneration failed for %s: %s", story_id, exc)
+    except Exception:
+        db.rollback()
+        logger.exception("Gherkin regeneration crashed for %s", story_id)
+    finally:
+        db.close()

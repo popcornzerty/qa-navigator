@@ -169,3 +169,91 @@ def test_genuinely_different_scenarios_are_kept(tmp_path: Path, monkeypatch):
     )
 
     assert len(scenarios) == 2
+
+
+def test_regenerating_gherkin_replaces_scenarios_and_their_tests(tmp_path: Path, monkeypatch):
+    """A Playwright test asserting a scenario that no longer exists still reports green."""
+    from fastapi.testclient import TestClient
+
+    from qa_engine import services
+    from qa_engine.database import SessionLocal
+    from qa_engine.main import app
+    from qa_engine.models import Feature, GherkinScenario, PlaywrightTest, UserStory
+
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "Cart.tsx").write_text(
+        'export const Cart = () => <Route path="/cart" />;', encoding="utf-8"
+    )
+    spec = repo / "tests" / "obsolete.spec.ts"
+    spec.parent.mkdir(parents=True)
+    spec.write_text("// obsolete", encoding="utf-8")
+
+    monkeypatch.setattr(
+        generation,
+        "generate_scenarios",
+        lambda *a, **k: [
+            generation.GeneratedScenario(
+                scenario="Nouveau scénario", given=["contexte"], when=["action"], then=["résultat"]
+            )
+        ],
+    )
+
+    with TestClient(app) as client:
+        created = client.post(
+            f"/api/v1/projects",
+            json={"name": "Regen", "repository": str(repo), "repositorySource": "local"},
+        )
+        project_id = created.json()["id"]
+        client.post("/api/v1/analyses", json={"project_id": project_id})
+
+        db = SessionLocal()
+        try:
+            feature = db.scalar(select_feature(Feature, project_id))
+            db.add(
+                UserStory(
+                    id="US-800",
+                    project_id=project_id,
+                    feature_id=feature.id,
+                    feature_name=feature.name,
+                    title="Story",
+                )
+            )
+            db.flush()
+            db.add(
+                GherkinScenario(
+                    id="US-800-SC-1",
+                    user_story_id="US-800",
+                    project_id=project_id,
+                    feature=feature.name,
+                    scenario="Ancien scénario",
+                    given=[],
+                    when=[],
+                    then=[],
+                )
+            )
+            db.add(
+                PlaywrightTest(
+                    id="pw-800",
+                    project_id=project_id,
+                    user_story_id="US-800",
+                    gherkin_scenario_id="US-800-SC-1",
+                    file="tests/obsolete.spec.ts",
+                )
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        services.regenerate_gherkin_for_story("US-800")
+
+        story = client.get("/api/v1/stories/US-800").json()
+        assert [s["scenario"] for s in story["gherkinScenarios"]] == ["Nouveau scénario"]
+        assert client.get("/api/v1/tests/pw-800").status_code == 404
+        assert not spec.exists(), "the spec of a deleted scenario must not survive"
+
+
+def select_feature(model, project_id):
+    from sqlalchemy import select
+
+    return select(model).where(model.project_id == project_id)

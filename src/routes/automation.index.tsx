@@ -97,8 +97,14 @@ function AutomationPage() {
       />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Tests" value={`${stats.total}`} hint="in this project" />
         <MetricCard
+          testId="metric-tests"
+          label="Tests"
+          value={`${stats.total}`}
+          hint="in this project"
+        />
+        <MetricCard
+          testId="metric-passed"
           label="Passed"
           value={`${stats.passed}`}
           tone="pass"
@@ -106,12 +112,18 @@ function AutomationPage() {
           progress={stats.passRate}
         />
         <MetricCard
+          testId="metric-failed"
           label="Failed"
           value={`${stats.failed}`}
           tone={stats.failed > 0 ? "fail" : "default"}
           hint="need investigation"
         />
-        <MetricCard label="Skipped" value={`${stats.skipped}`} hint="not executed" />
+        <MetricCard
+          testId="metric-skipped"
+          label="Skipped"
+          value={`${stats.skipped}`}
+          hint="not executed"
+        />
       </div>
 
       <Panel>

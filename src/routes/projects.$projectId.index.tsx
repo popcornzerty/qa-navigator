@@ -81,11 +81,28 @@ function ProjectDetail() {
       />
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-        <MetricCard label="Features" value={String(stats.data?.features ?? "—")} />
-        <MetricCard label="User stories" value={String(stats.data?.userStories ?? "—")} />
-        <MetricCard label="Gherkin" value={String(stats.data?.gherkinScenarios ?? "—")} />
-        <MetricCard label="Playwright" value={String(stats.data?.playwrightTests ?? "—")} />
         <MetricCard
+          testId="metric-features"
+          label="Features"
+          value={String(stats.data?.features ?? "—")}
+        />
+        <MetricCard
+          testId="metric-user-stories"
+          label="User stories"
+          value={String(stats.data?.userStories ?? "—")}
+        />
+        <MetricCard
+          testId="metric-gherkin"
+          label="Gherkin"
+          value={String(stats.data?.gherkinScenarios ?? "—")}
+        />
+        <MetricCard
+          testId="metric-playwright"
+          label="Playwright"
+          value={String(stats.data?.playwrightTests ?? "—")}
+        />
+        <MetricCard
+          testId="metric-coverage"
           label="Coverage"
           value={stats.data ? percent(stats.data.coverage) : "—"}
           progress={stats.data?.coverage ?? 0}

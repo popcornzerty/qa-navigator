@@ -23,6 +23,7 @@ from qa_engine.services import (
     default_jira_jql,
     generate_playwright_for_scenario,
     import_jira_stories,
+    regenerate_gherkin_for_story,
     run_analysis,
     run_playwright_test,
 )
@@ -343,6 +344,30 @@ def update_criterion(
     db.commit()
     db.refresh(story)
     return serializers.story(story)
+
+
+@router.post(
+    "/stories/{story_id}/gherkin",
+    response_model=schemas.JobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def regenerate_gherkin(
+    story_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)
+):
+    """Rebuild this story's Gherkin from the current analysis and prompts.
+
+    Replaces the existing scenarios, and removes the Playwright tests derived from them:
+    a test asserting a scenario that no longer exists still runs, and still reports green.
+    """
+    story = story_or_404(story_id, db)
+    if story.feature_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="This story is not attached to an analysed feature, so its scenarios "
+            "cannot be grounded in real code. Re-run an analysis first.",
+        )
+    background_tasks.add_task(regenerate_gherkin_for_story, story_id)
+    return schemas.JobRead(job_id=story_id, status="queued", progress=0)
 
 
 @router.post("/stories/{story_id}/jira-sync", response_model=schemas.UserStoryRead)

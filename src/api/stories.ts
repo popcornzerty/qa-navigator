@@ -89,6 +89,22 @@ export const storiesApi = {
     );
   },
 
+  /**
+   * Rebuilds this story's Gherkin from the current analysis.
+   *
+   * Replaces the existing scenarios and drops the Playwright tests derived from them:
+   * a test asserting a scenario that no longer exists still runs, and still reports green.
+   */
+  regenerateGherkin(storyId: string): Promise<{ jobId: string; status: string }> {
+    return resolve(
+      async () => ({ jobId: storyId, status: "queued" }),
+      () =>
+        http<{ jobId: string; status: string }>(`/stories/${storyId}/gherkin`, {
+          method: "POST",
+        }),
+    );
+  },
+
   syncToJira(storyId: string): Promise<UserStory> {
     return resolve(
       async () => {

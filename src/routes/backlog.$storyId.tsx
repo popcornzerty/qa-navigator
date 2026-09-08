@@ -59,6 +59,15 @@ function StoryDetailPage() {
     onError: () => toast.error("Could not approve this story"),
   });
 
+  const regenerateGherkin = useMutation({
+    mutationFn: () => storiesApi.regenerateGherkin(storyId),
+    onSuccess: () => {
+      invalidate();
+      toast.success("Gherkin regeneration queued — scenarios will be replaced");
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
   const syncJira = useMutation({
     mutationFn: () => storiesApi.syncToJira(storyId),
     onSuccess: (updated) => {
@@ -139,7 +148,21 @@ function StoryDetailPage() {
           />
 
           <Panel>
-            <PanelHeader title="Gherkin" meta={`${story.gherkinScenarios.length} scenarios`} />
+            <PanelHeader
+              title="Gherkin"
+              meta={`${story.gherkinScenarios.length} scenarios`}
+              actions={
+                <Button
+                  variant="outline"
+                  size="sm"
+                  data-testid="gherkin-regenerate"
+                  disabled={regenerateGherkin.isPending}
+                  onClick={() => regenerateGherkin.mutate()}
+                >
+                  Regenerate Gherkin
+                </Button>
+              }
+            />
             <div className="divide-y divide-line">
               {story.gherkinScenarios.map((scenario) => (
                 <ScenarioEditor key={scenario.id} scenario={scenario} onSaved={invalidate} />

@@ -61,10 +61,12 @@ API_PATTERN = re.compile(
 
 # Collected so Playwright generation can later target real selectors instead of guesses.
 TESTID_PATTERN = re.compile(r"data-testid\s*=\s*(?:\{\s*)?(['\"])(?P<value>[^'\"]+)\1")
-# Anchors are often declared in a constant and spread over a list —
-# `{ to: "/backlog", testId: "nav-backlog" }` — leaving the attribute itself dynamic.
-# Reading only the attribute would miss exactly the navigation anchors a test needs.
-TESTID_PROPERTY = re.compile(r"\btest[iI][dD]\s*:\s*(['\"])(?P<value>[^'\"]+)\1")
+# Anchors are frequently declared away from the element: as an object property spread over
+# a list (`{ to: "/backlog", testId: "nav-backlog" }`), or as a prop forwarded by a shared
+# component (`<MetricCard testId="metric-coverage" />`). Both leave the rendered
+# `data-testid` dynamic, so reading only the attribute misses them. Accepting `:` and `=`
+# covers both. This also matches `data-testid=` itself, which simply dedupes.
+TESTID_PROPERTY = re.compile(r"\btest[iI][dD]\s*[:=]\s*(['\"])(?P<value>[^'\"]+)\1")
 FORM_PATTERN = re.compile(r"<form\b|\bonSubmit\s*=|\buseForm\s*\(")
 
 RESERVED_NAMES = {

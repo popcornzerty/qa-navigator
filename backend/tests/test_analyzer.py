@@ -119,3 +119,23 @@ def test_anchors_declared_as_constants_are_detected():
     """
     found = {s.name for s in extract_symbols(source, "src/components/layout/nav.tsx") if s.kind == "testid"}
     assert found == {"nav-backlog", "nav-coverage"}
+
+
+def test_anchors_forwarded_as_a_prop_are_detected():
+    """A shared component receives the anchor as a prop, leaving data-testid dynamic."""
+    source = """
+    export const Dashboard = () => (
+      <div>
+        <MetricCard testId="metric-coverage" label="Coverage" value="87.9%" />
+        <MetricCard testId="metric-tests" label="Tests" value="76" />
+      </div>
+    );
+    """
+    found = {s.name for s in extract_symbols(source, "src/routes/index.tsx") if s.kind == "testid"}
+    assert found == {"metric-coverage", "metric-tests"}
+
+
+def test_an_anchor_written_both_ways_is_reported_once():
+    source = 'export const Row = () => <li data-testid="cart-line" />;'
+    hits = [s for s in extract_symbols(source, "src/cart.tsx") if s.kind == "testid"]
+    assert [s.name for s in hits] == ["cart-line"]
