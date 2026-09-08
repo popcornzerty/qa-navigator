@@ -155,6 +155,47 @@ def _build_prompt(
     )
 
 
+def _render_steps(
+    steps: list[tuple[str, str]],
+    known_test_ids: set[str],
+    prompt: str,
+    *,
+    temperature: float,
+) -> tuple[list[str], list[str]]:
+    """One generation round: returns the rendered step bodies and what stayed unresolved."""
+    payload = ollama.chat_json(SYSTEM_PROMPT, prompt, SPEC_SCHEMA, temperature=temperature)
+
+    # The prompt numbers steps from 1; internally they are 0-based.
+    by_index: dict[int, list[str]] = {}
+    for entry in payload.get("etapes", []):
+        try:
+            index = int(entry.get("index")) - 1
+        except (TypeError, ValueError):
+            continue
+        if 0 <= index < len(steps):
+            by_index[index] = [str(line) for line in entry.get("code", [])]
+
+    unresolved: list[str] = []
+    body: list[str] = []
+    for index, (keyword, text) in enumerate(steps):
+        label = _escape(f"{keyword} {text}")
+        body.append(f'    await test.step("{label}", async () => {{')
+        accepted: list[str] = []
+        for line in by_index.get(index, []):
+            valid, reason = validate_line(line, known_test_ids)
+            if valid:
+                accepted.append(valid)
+            elif reason and reason != "ligne vide":
+                accepted.append(f"// TODO manuel ({reason}) : {line.strip()}")
+                unresolved.append(f"{keyword} {text} — {reason}")
+        if not accepted:
+            accepted.append("// TODO manuel : étape non automatisable avec les éléments détectés")
+            unresolved.append(f"{keyword} {text} — aucune instruction exploitable")
+        body.extend(f"      {line}" for line in accepted)
+        body.append("    });")
+    return body, unresolved
+
+
 def generate_spec(
     context: FeatureContext,
     story_id: str,
@@ -171,40 +212,18 @@ def generate_spec(
     steps = flatten_steps(given, when, then)
     known_test_ids = set(context.test_ids)
 
-    payload = ollama.chat_json(
-        SYSTEM_PROMPT,
-        _build_prompt(context, story_title, scenario_name, steps, base_url),
-        SPEC_SCHEMA,
-    )
-    # The prompt numbers steps from 1; internally they are 0-based.
-    by_index: dict[int, list[str]] = {}
-    for entry in payload.get("etapes", []):
-        try:
-            index = int(entry.get("index")) - 1
-        except (TypeError, ValueError):
-            continue
-        if 0 <= index < len(steps):
-            by_index[index] = [str(line) for line in entry.get("code", [])]
+    prompt = _build_prompt(context, story_title, scenario_name, steps, base_url)
 
-    unresolved: list[str] = []
-    body: list[str] = []
-    for index, (keyword, text) in enumerate(steps):
-        label = _escape(f"{keyword} {text}")
-        body.append(f'    await test.step("{label}", async () => {{')
-        lines = by_index.get(index, [])
-        accepted: list[str] = []
-        for line in lines:
-            valid, reason = validate_line(line, known_test_ids)
-            if valid:
-                accepted.append(valid)
-            elif reason and reason != "ligne vide":
-                accepted.append(f"// TODO manuel ({reason}) : {line.strip()}")
-                unresolved.append(f"{keyword} {text} — {reason}")
-        if not accepted:
-            accepted.append("// TODO manuel : étape non automatisable avec les éléments détectés")
-            unresolved.append(f"{keyword} {text} — aucune instruction exploitable")
-        body.extend(f"      {line}" for line in accepted)
-        body.append("    });")
+    # Generation is high variance: the same model and prompt can return nothing usable on
+    # one call and a fully valid set on the next. A spec where *every* step failed is far
+    # more likely to be a bad roll than a genuinely unautomatable scenario, so it is worth
+    # one deterministic retry before giving up on the whole scenario.
+    body, unresolved = _render_steps(steps, known_test_ids, prompt, temperature=0.2)
+    if len(unresolved) >= len(steps):
+        logger.info("Every step came back unusable for %s; retrying at temperature 0", scenario_id)
+        retry_body, retry_unresolved = _render_steps(steps, known_test_ids, prompt, temperature=0.0)
+        if len(retry_unresolved) < len(unresolved):
+            body, unresolved = retry_body, retry_unresolved
 
     header = [
         "// Généré par AI QA Agent — ne pas éditer à la main, la régénération écrase ce fichier.",

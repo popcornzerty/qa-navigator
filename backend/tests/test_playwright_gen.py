@@ -181,3 +181,64 @@ def test_out_of_range_index_is_ignored(tmp_path: Path, monkeypatch):
     )
     assert not spec.is_runnable
     assert "page.goto" not in spec.source
+
+
+def test_a_fully_unusable_answer_is_retried_once(tmp_path: Path, monkeypatch):
+    """Generation is high variance: everything failing is usually a bad roll, not a verdict."""
+    calls: list[float] = []
+
+    def answer(_system, _prompt, _schema, *, temperature=0.2):
+        calls.append(temperature)
+        if len(calls) == 1:
+            return {"etapes": [{"index": 1, "code": ["console.log('nope');"]}]}
+        return {"etapes": [{"index": 1, "code": ['await page.goto("/cart");']}]}
+
+    monkeypatch.setattr(playwright_gen.ollama, "chat_json", answer)
+
+    spec = playwright_gen.generate_spec(
+        _context(tmp_path),
+        story_id="US-020",
+        story_title="Story",
+        scenario_id="US-020-SC-1",
+        scenario_name="Scénario",
+        given=["contexte"],
+        when=[],
+        then=[],
+        base_url="http://localhost:8080",
+    )
+
+    assert calls == [0.2, 0.0], "the retry must be deterministic"
+    assert spec.is_runnable
+    assert 'await page.goto("/cart");' in spec.source
+
+
+def test_a_partly_usable_answer_is_not_retried(tmp_path: Path, monkeypatch):
+    """One bad step out of three is a real limit, not noise — do not pay for a second call."""
+    calls: list[float] = []
+
+    def answer(_system, _prompt, _schema, *, temperature=0.2):
+        calls.append(temperature)
+        return {
+            "etapes": [
+                {"index": 1, "code": ['await page.goto("/cart");']},
+                {"index": 2, "code": []},
+                {"index": 3, "code": ['await expect(page.getByTestId("cart-total")).toBeVisible();']},
+            ]
+        }
+
+    monkeypatch.setattr(playwright_gen.ollama, "chat_json", answer)
+
+    spec = playwright_gen.generate_spec(
+        _context(tmp_path),
+        story_id="US-021",
+        story_title="Story",
+        scenario_id="US-021-SC-1",
+        scenario_name="Scénario",
+        given=["contexte"],
+        when=["action"],
+        then=["résultat"],
+        base_url="http://localhost:8080",
+    )
+
+    assert calls == [0.2]
+    assert len(spec.unresolved) == 1
