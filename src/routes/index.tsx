@@ -44,11 +44,12 @@ function Dashboard() {
   });
   const job = useQuery({
     queryKey: ["analysis", projectId],
-    queryFn: () => analysisApi.current(projectId ?? "prj-atlas-store"),
+    queryFn: () => analysisApi.current(projectId!),
+    enabled: Boolean(projectId),
   });
   const stories = useQuery({
     queryKey: ["stories", projectId],
-    queryFn: () => storiesApi.list({ projectId: projectId ?? undefined }),
+    queryFn: () => storiesApi.list(projectId ? { projectId } : {}),
   });
 
   const data = summary.data;

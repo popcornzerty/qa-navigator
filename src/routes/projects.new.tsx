@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { toast } from "sonner";
-import { projectsApi } from "../api";
+import { API_MODE, projectsApi } from "../api";
 import { PageHeader } from "../components/layout/app-shell";
 import { Button } from "../components/ui/button";
 import { Panel, PanelBody, PanelHeader } from "../components/ui/panel";
@@ -30,6 +30,9 @@ export const Route = createFileRoute("/projects/new")({
 const fieldClass =
   "w-full rounded-md bg-panel2 px-3 py-2 text-sm ring-1 ring-line outline-none focus:ring-primary/50";
 const labelClass = "font-mono text-[10px] tracking-wider text-dim uppercase";
+// Both sources are supported end-to-end: the backend clones a public git repository, or
+// reads a directory on this machine.
+const repositorySources: RepositorySource[] = ["github", "local"];
 
 function NewProjectPage() {
   const navigate = useNavigate();
@@ -56,7 +59,14 @@ function NewProjectPage() {
 
   return (
     <>
-      <PageHeader title="New project" subtitle="Mocked in Phase 1 — no external service is contacted" />
+      <PageHeader
+        title="New project"
+        subtitle={
+          API_MODE === "http"
+            ? "Public git repository or local directory — the engine clones and analyses it"
+            : "Mocked in Phase 1 — no external service is contacted"
+        }
+      />
 
       <Panel className="max-w-3xl">
         <PanelHeader title="Project configuration" meta="step 1 of 1" />
@@ -93,7 +103,7 @@ function NewProjectPage() {
             <fieldset className="space-y-2">
               <legend className={labelClass}>Repository source</legend>
               <div className="flex gap-2">
-                {(["github", "local"] as RepositorySource[]).map((source) => (
+                {repositorySources.map((source) => (
                   <button
                     key={source}
                     type="button"
@@ -123,7 +133,7 @@ function NewProjectPage() {
                   placeholder={
                     repositorySource === "github"
                       ? "github.com/atlas-demo/atlas-storefront"
-                      : "local://workspaces/atlas-admin"
+                      : "C:\\path\\to\\repository"
                   }
                   className={`${fieldClass} font-mono text-[12px]`}
                 />
@@ -141,7 +151,7 @@ function NewProjectPage() {
               </div>
             </div>
 
-            <fieldset className="space-y-2">
+            {API_MODE === "mock" ? <fieldset className="space-y-2">
               <legend className={labelClass}>Jira integration</legend>
               <div className="flex flex-wrap items-center gap-2">
                 {(["not_connected", "connected"] as JiraConnection[]).map((value) => (
@@ -168,7 +178,7 @@ function NewProjectPage() {
                   />
                 ) : null}
               </div>
-            </fieldset>
+            </fieldset> : null}
 
             <fieldset className="space-y-2">
               <legend className={labelClass}>AI engine</legend>

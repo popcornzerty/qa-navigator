@@ -10,6 +10,13 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as CoverageRouteImport } from './routes/coverage'
+import { Route as GherkinRouteImport } from './routes/gherkin'
+import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as AutomationIndexRouteImport } from './routes/automation.index'
+import { Route as AutomationTestIdRouteImport } from './routes/automation.$testId'
+import { Route as BacklogIndexRouteImport } from './routes/backlog.index'
+import { Route as BacklogStoryIdRouteImport } from './routes/backlog.$storyId'
 import { Route as ProjectsIndexRouteImport } from './routes/projects.index'
 import { Route as ProjectsNewRouteImport } from './routes/projects.new'
 import { Route as ProjectsProjectIdIndexRouteImport } from './routes/projects.$projectId.index'
@@ -18,6 +25,41 @@ import { Route as ProjectsProjectIdAnalysisRouteImport } from './routes/projects
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CoverageRoute = CoverageRouteImport.update({
+  id: '/coverage',
+  path: '/coverage',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const GherkinRoute = GherkinRouteImport.update({
+  id: '/gherkin',
+  path: '/gherkin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AutomationIndexRoute = AutomationIndexRouteImport.update({
+  id: '/automation/',
+  path: '/automation/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AutomationTestIdRoute = AutomationTestIdRouteImport.update({
+  id: '/automation/$testId',
+  path: '/automation/$testId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BacklogIndexRoute = BacklogIndexRouteImport.update({
+  id: '/backlog/',
+  path: '/backlog/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BacklogStoryIdRoute = BacklogStoryIdRouteImport.update({
+  id: '/backlog/$storyId',
+  path: '/backlog/$storyId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsIndexRoute = ProjectsIndexRouteImport.update({
@@ -44,14 +86,28 @@ const ProjectsProjectIdAnalysisRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/coverage': typeof CoverageRoute
+  '/gherkin': typeof GherkinRoute
+  '/settings': typeof SettingsRoute
+  '/automation/$testId': typeof AutomationTestIdRoute
+  '/backlog/$storyId': typeof BacklogStoryIdRoute
   '/projects/new': typeof ProjectsNewRoute
+  '/automation/': typeof AutomationIndexRoute
+  '/backlog/': typeof BacklogIndexRoute
   '/projects/': typeof ProjectsIndexRoute
   '/projects/$projectId/analysis': typeof ProjectsProjectIdAnalysisRoute
   '/projects/$projectId/': typeof ProjectsProjectIdIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/coverage': typeof CoverageRoute
+  '/gherkin': typeof GherkinRoute
+  '/settings': typeof SettingsRoute
+  '/automation/$testId': typeof AutomationTestIdRoute
+  '/backlog/$storyId': typeof BacklogStoryIdRoute
   '/projects/new': typeof ProjectsNewRoute
+  '/automation': typeof AutomationIndexRoute
+  '/backlog': typeof BacklogIndexRoute
   '/projects': typeof ProjectsIndexRoute
   '/projects/$projectId/analysis': typeof ProjectsProjectIdAnalysisRoute
   '/projects/$projectId': typeof ProjectsProjectIdIndexRoute
@@ -59,7 +115,14 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/coverage': typeof CoverageRoute
+  '/gherkin': typeof GherkinRoute
+  '/settings': typeof SettingsRoute
+  '/automation/$testId': typeof AutomationTestIdRoute
+  '/backlog/$storyId': typeof BacklogStoryIdRoute
   '/projects/new': typeof ProjectsNewRoute
+  '/automation/': typeof AutomationIndexRoute
+  '/backlog/': typeof BacklogIndexRoute
   '/projects/': typeof ProjectsIndexRoute
   '/projects/$projectId/analysis': typeof ProjectsProjectIdAnalysisRoute
   '/projects/$projectId/': typeof ProjectsProjectIdIndexRoute
@@ -68,21 +131,42 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/coverage'
+    | '/gherkin'
+    | '/settings'
+    | '/automation/$testId'
+    | '/backlog/$storyId'
     | '/projects/new'
+    | '/automation/'
+    | '/backlog/'
     | '/projects/'
     | '/projects/$projectId/analysis'
     | '/projects/$projectId/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/coverage'
+    | '/gherkin'
+    | '/settings'
+    | '/automation/$testId'
+    | '/backlog/$storyId'
     | '/projects/new'
+    | '/automation'
+    | '/backlog'
     | '/projects'
     | '/projects/$projectId/analysis'
     | '/projects/$projectId'
   id:
     | '__root__'
     | '/'
+    | '/coverage'
+    | '/gherkin'
+    | '/settings'
+    | '/automation/$testId'
+    | '/backlog/$storyId'
     | '/projects/new'
+    | '/automation/'
+    | '/backlog/'
     | '/projects/'
     | '/projects/$projectId/analysis'
     | '/projects/$projectId/'
@@ -90,7 +174,14 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  CoverageRoute: typeof CoverageRoute
+  GherkinRoute: typeof GherkinRoute
+  SettingsRoute: typeof SettingsRoute
+  AutomationTestIdRoute: typeof AutomationTestIdRoute
+  BacklogStoryIdRoute: typeof BacklogStoryIdRoute
   ProjectsNewRoute: typeof ProjectsNewRoute
+  AutomationIndexRoute: typeof AutomationIndexRoute
+  BacklogIndexRoute: typeof BacklogIndexRoute
   ProjectsIndexRoute: typeof ProjectsIndexRoute
   ProjectsProjectIdAnalysisRoute: typeof ProjectsProjectIdAnalysisRoute
   ProjectsProjectIdIndexRoute: typeof ProjectsProjectIdIndexRoute
@@ -103,6 +194,55 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/coverage': {
+      id: '/coverage'
+      path: '/coverage'
+      fullPath: '/coverage'
+      preLoaderRoute: typeof CoverageRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/gherkin': {
+      id: '/gherkin'
+      path: '/gherkin'
+      fullPath: '/gherkin'
+      preLoaderRoute: typeof GherkinRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/automation/': {
+      id: '/automation/'
+      path: '/automation'
+      fullPath: '/automation/'
+      preLoaderRoute: typeof AutomationIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/automation/$testId': {
+      id: '/automation/$testId'
+      path: '/automation/$testId'
+      fullPath: '/automation/$testId'
+      preLoaderRoute: typeof AutomationTestIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/backlog/': {
+      id: '/backlog/'
+      path: '/backlog'
+      fullPath: '/backlog/'
+      preLoaderRoute: typeof BacklogIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/backlog/$storyId': {
+      id: '/backlog/$storyId'
+      path: '/backlog/$storyId'
+      fullPath: '/backlog/$storyId'
+      preLoaderRoute: typeof BacklogStoryIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/': {
@@ -138,7 +278,14 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  CoverageRoute: CoverageRoute,
+  GherkinRoute: GherkinRoute,
+  SettingsRoute: SettingsRoute,
+  AutomationTestIdRoute: AutomationTestIdRoute,
+  BacklogStoryIdRoute: BacklogStoryIdRoute,
   ProjectsNewRoute: ProjectsNewRoute,
+  AutomationIndexRoute: AutomationIndexRoute,
+  BacklogIndexRoute: BacklogIndexRoute,
   ProjectsIndexRoute: ProjectsIndexRoute,
   ProjectsProjectIdAnalysisRoute: ProjectsProjectIdAnalysisRoute,
   ProjectsProjectIdIndexRoute: ProjectsProjectIdIndexRoute,

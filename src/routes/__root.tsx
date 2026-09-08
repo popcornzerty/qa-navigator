@@ -128,7 +128,7 @@ function RootComponent() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <CurrentProjectProvider initialProjectId="prj-atlas-store">
+      <CurrentProjectProvider>
         <AppShell>
           {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
           <Outlet />
