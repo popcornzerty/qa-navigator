@@ -61,6 +61,10 @@ API_PATTERN = re.compile(
 
 # Collected so Playwright generation can later target real selectors instead of guesses.
 TESTID_PATTERN = re.compile(r"data-testid\s*=\s*(?:\{\s*)?(['\"])(?P<value>[^'\"]+)\1")
+# Anchors are often declared in a constant and spread over a list —
+# `{ to: "/backlog", testId: "nav-backlog" }` — leaving the attribute itself dynamic.
+# Reading only the attribute would miss exactly the navigation anchors a test needs.
+TESTID_PROPERTY = re.compile(r"\btest[iI][dD]\s*:\s*(['\"])(?P<value>[^'\"]+)\1")
 FORM_PATTERN = re.compile(r"<form\b|\bonSubmit\s*=|\buseForm\s*\(")
 
 RESERVED_NAMES = {
@@ -188,15 +192,16 @@ def extract_symbols(text: str, relative_path: str) -> list[DiscoveredSymbol]:
             )
         )
 
-    for match in TESTID_PATTERN.finditer(text):
-        symbols.append(
-            DiscoveredSymbol(
-                match.group("value"),
-                "testid",
-                relative_path,
-                _line_number(text, match.start()),
+    for pattern in (TESTID_PATTERN, TESTID_PROPERTY):
+        for match in pattern.finditer(text):
+            symbols.append(
+                DiscoveredSymbol(
+                    match.group("value"),
+                    "testid",
+                    relative_path,
+                    _line_number(text, match.start()),
+                )
             )
-        )
 
     form_match = FORM_PATTERN.search(text)
     if form_match:

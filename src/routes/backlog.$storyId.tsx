@@ -102,6 +102,7 @@ function StoryDetailPage() {
             <Button
               variant="primary"
               size="sm"
+              data-testid="story-approve"
               disabled={approve.isPending || story.status === "approved"}
               onClick={() => approve.mutate()}
             >
@@ -266,6 +267,7 @@ function CriteriaPanel({
                 value={value}
                 rows={1}
                 aria-label={`Acceptance criterion ${criterion.id}`}
+                data-testid="acceptance-criterion"
                 onChange={(event) =>
                   setDrafts((current) => ({ ...current, [criterion.id]: event.target.value }))
                 }

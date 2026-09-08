@@ -92,6 +92,7 @@ function NewProjectPage() {
               </label>
               <input
                 id="name"
+                data-testid="project-name"
                 required
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -127,6 +128,7 @@ function NewProjectPage() {
                 </label>
                 <input
                   id="repository"
+                  data-testid="project-repository"
                   required
                   value={repository}
                   onChange={(e) => setRepository(e.target.value)}
@@ -144,6 +146,7 @@ function NewProjectPage() {
                 </label>
                 <input
                   id="branch"
+                  data-testid="project-branch"
                   value={branch}
                   onChange={(e) => setBranch(e.target.value)}
                   className={`${fieldClass} font-mono text-[12px]`}
@@ -151,34 +154,36 @@ function NewProjectPage() {
               </div>
             </div>
 
-            {API_MODE === "mock" ? <fieldset className="space-y-2">
-              <legend className={labelClass}>Jira integration</legend>
-              <div className="flex flex-wrap items-center gap-2">
-                {(["not_connected", "connected"] as JiraConnection[]).map((value) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => setJiraConnection(value)}
-                    className={`rounded-md px-3 py-1.5 text-xs ring-1 ${
-                      jiraConnection === value
-                        ? "bg-primary/10 text-primary ring-primary/30"
-                        : "text-muted-foreground ring-line hover:text-foreground"
-                    }`}
-                  >
-                    {value === "connected" ? "Connected" : "Not connected"}
-                  </button>
-                ))}
-                {jiraConnection === "connected" ? (
-                  <input
-                    aria-label="Jira project key"
-                    value={jiraProject}
-                    onChange={(e) => setJiraProject(e.target.value)}
-                    placeholder="ATL"
-                    className="w-28 rounded-md bg-panel2 px-3 py-1.5 font-mono text-xs ring-1 ring-line outline-none focus:ring-primary/50"
-                  />
-                ) : null}
-              </div>
-            </fieldset> : null}
+            {API_MODE === "mock" ? (
+              <fieldset className="space-y-2">
+                <legend className={labelClass}>Jira integration</legend>
+                <div className="flex flex-wrap items-center gap-2">
+                  {(["not_connected", "connected"] as JiraConnection[]).map((value) => (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setJiraConnection(value)}
+                      className={`rounded-md px-3 py-1.5 text-xs ring-1 ${
+                        jiraConnection === value
+                          ? "bg-primary/10 text-primary ring-primary/30"
+                          : "text-muted-foreground ring-line hover:text-foreground"
+                      }`}
+                    >
+                      {value === "connected" ? "Connected" : "Not connected"}
+                    </button>
+                  ))}
+                  {jiraConnection === "connected" ? (
+                    <input
+                      aria-label="Jira project key"
+                      value={jiraProject}
+                      onChange={(e) => setJiraProject(e.target.value)}
+                      placeholder="ATL"
+                      className="w-28 rounded-md bg-panel2 px-3 py-1.5 font-mono text-xs ring-1 ring-line outline-none focus:ring-primary/50"
+                    />
+                  ) : null}
+                </div>
+              </fieldset>
+            ) : null}
 
             <fieldset className="space-y-2">
               <legend className={labelClass}>AI engine</legend>

@@ -13,10 +13,17 @@ export function MetricCard({
   progress?: number;
   tone?: "default" | "pass" | "fail";
 }) {
+  // Derived from the label so each metric is addressable by name, e.g. `metric-coverage`.
+  const testId = `metric-${label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "")}`;
+
   return (
-    <div className="rounded-xl bg-panel p-4 ring-1 ring-line">
+    <div data-testid={testId} className="rounded-xl bg-panel p-4 ring-1 ring-line">
       <p className="font-mono text-[10px] tracking-wider text-dim uppercase">{label}</p>
       <p
+        data-testid={`${testId}-value`}
         className={cn(
           "font-display mt-2 text-3xl font-semibold",
           tone === "pass" && "text-pass",

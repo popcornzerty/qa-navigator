@@ -122,8 +122,10 @@ def _build_prompt(
     steps: list[tuple[str, str]],
     base_url: str,
 ) -> str:
+    # Numbered from 1: with a 0-based list, small models return code shifted by one step,
+    # putting an assertion under a "Quand" and an action under an "Alors".
     numbered = "\n".join(
-        f"{index}. {keyword} {text}" for index, (keyword, text) in enumerate(steps)
+        f"{index}. {keyword} {text}" for index, (keyword, text) in enumerate(steps, start=1)
     )
     anchors = (
         ", ".join(sorted(context.test_ids)) if context.test_ids else "aucune ancre disponible"
@@ -139,6 +141,9 @@ def _build_prompt(
         "Pour chaque étape, donne les instructions Playwright (TypeScript) qui la réalisent.\n"
         "Règles strictes :\n"
         "- une instruction par chaîne, terminée par un point-virgule ;\n"
+        "- si l'ancre `app-ready` est disponible, fais suivre chaque `page.goto(...)` de "
+        "`await page.getByTestId('app-ready').waitFor();` : l'application est rendue côté "
+        "serveur et un clic avant l'hydratation ne déclenche rien ;\n"
         "- utilise uniquement `page.goto`, `page.getByTestId`, `page.getByRole`, "
         "`page.getByLabel`, `page.getByText`, `page.locator`, et `expect(...)` ;\n"
         "- pour les sélecteurs, n'utilise QUE les ancres data-testid listées ci-dessus. "
@@ -171,13 +176,15 @@ def generate_spec(
         _build_prompt(context, story_title, scenario_name, steps, base_url),
         SPEC_SCHEMA,
     )
+    # The prompt numbers steps from 1; internally they are 0-based.
     by_index: dict[int, list[str]] = {}
     for entry in payload.get("etapes", []):
         try:
-            index = int(entry.get("index"))
+            index = int(entry.get("index")) - 1
         except (TypeError, ValueError):
             continue
-        by_index[index] = [str(line) for line in entry.get("code", [])]
+        if 0 <= index < len(steps):
+            by_index[index] = [str(line) for line in entry.get("code", [])]
 
     unresolved: list[str] = []
     body: list[str] = []

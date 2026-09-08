@@ -157,6 +157,7 @@ function GherkinPage() {
             <Button
               variant="outline"
               size="sm"
+              data-testid="gherkin-validate-all"
               disabled={validateAll.isPending || visible.length === 0}
               onClick={() => validateAll.mutate()}
             >
@@ -165,6 +166,7 @@ function GherkinPage() {
             <Button
               variant="primary"
               size="sm"
+              data-testid="gherkin-generate-all"
               disabled={generateAll.isPending || visible.length === 0}
               onClick={() => generateAll.mutate()}
             >

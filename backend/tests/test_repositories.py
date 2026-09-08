@@ -16,3 +16,25 @@ def test_local_provider_honours_gitignore_and_exclusions(tmp_path: Path):
 
     files = LocalRepositoryProvider(tmp_path).source_files()
     assert [item.relative_path for item in files] == ["src/app.ts"]
+
+
+def test_engine_work_directory_is_not_scanned(tmp_path, monkeypatch):
+    """In a monorepo the engine's clones sit inside the repository it analyses."""
+    from qa_engine.config import settings
+    from qa_engine.repositories import LocalRepositoryProvider
+
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "App.tsx").write_text("export const App = () => <div />;", encoding="utf-8")
+
+    # A clone of the repository, living under the engine's work directory.
+    clone = repo / "backend" / "work" / "clones" / "self" / "src"
+    clone.mkdir(parents=True)
+    (clone / "App.tsx").write_text("export const App = () => <div />;", encoding="utf-8")
+
+    monkeypatch.setattr(
+        type(settings), "work_root", property(lambda _: repo / "backend" / "work")
+    )
+
+    paths = [item.relative_path for item in LocalRepositoryProvider(repo).source_files()]
+    assert paths == ["src/App.tsx"]

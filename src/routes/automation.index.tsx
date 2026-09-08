@@ -135,7 +135,7 @@ function AutomationPage() {
         />
 
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table data-testid="automation-table" className="w-full text-sm">
             <thead>
               <tr className="border-b border-line text-left text-[11px] tracking-wider text-dim uppercase">
                 <th className="px-4 py-2 font-medium">File</th>
@@ -149,7 +149,11 @@ function AutomationPage() {
             </thead>
             <tbody className="divide-y divide-line">
               {tests.map((test) => (
-                <tr key={test.id} className="transition-colors hover:bg-panel2">
+                <tr
+                  key={test.id}
+                  data-testid="test-row"
+                  className="transition-colors hover:bg-panel2"
+                >
                   <td className="px-4 py-3 font-mono text-[12px]">{test.file}</td>
                   <td className="px-3 py-3">
                     <Link
@@ -175,13 +179,14 @@ function AutomationPage() {
                   <td className="px-4 py-3">
                     <div className="flex justify-end gap-2">
                       <Link to="/automation/$testId" params={{ testId: test.id }}>
-                        <Button variant="outline" size="sm">
+                        <Button variant="outline" size="sm" data-testid="test-view">
                           View
                         </Button>
                       </Link>
                       <Button
                         variant="subtle"
                         size="sm"
+                        data-testid="test-run"
                         disabled={run.isPending}
                         onClick={() => run.mutate(test.id)}
                       >
@@ -190,6 +195,7 @@ function AutomationPage() {
                       <Button
                         variant="ghost"
                         size="sm"
+                        data-testid="test-regenerate"
                         disabled={regenerate.isPending}
                         onClick={() => regenerate.mutate(test.id)}
                       >

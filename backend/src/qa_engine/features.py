@@ -231,3 +231,26 @@ def group_symbols(symbols: list[DiscoveredSymbol]) -> list[DiscoveredFeature]:
         features.append(feature)
 
     return sorted(features, key=lambda item: (-item.confidence, item.name))
+
+
+def shared_test_ids(symbols: list[DiscoveredSymbol]) -> list[str]:
+    """Test anchors that belong to no single domain, and are therefore available everywhere.
+
+    Navigation, the page header and the project switcher live in shared layout files, which
+    grouping deliberately drops — they are not a functional domain of their own. Their
+    anchors are still the ones a test needs to reach a screen, so they are offered to every
+    feature instead of being lost.
+    """
+    file_domains: dict[str, str] = {}
+    for symbol in symbols:
+        if symbol.kind == "route":
+            file_domains.setdefault(symbol.source_path, _route_domain(symbol.name))
+
+    shared: set[str] = set()
+    for symbol in symbols:
+        if symbol.kind != "testid":
+            continue
+        domain = file_domains.get(symbol.source_path) or _path_domain(symbol.source_path)
+        if domain is None:
+            shared.add(symbol.name)
+    return sorted(shared)

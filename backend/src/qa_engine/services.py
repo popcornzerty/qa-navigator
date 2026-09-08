@@ -21,7 +21,7 @@ from qa_engine import execution, generation, jira, playwright_gen
 from qa_engine.analyzer import extract_repository_metadata
 from qa_engine.config import settings
 from qa_engine.database import SessionLocal
-from qa_engine.features import group_symbols
+from qa_engine.features import group_symbols, shared_test_ids
 from qa_engine.repositories import GitCloneError, GitRepositoryProvider
 from qa_engine.models import (
     AcceptanceCriterion,
@@ -290,6 +290,32 @@ def _sync_working_copy(project: Project) -> str | None:
     return provider.head_revision()
 
 
+def _relink_stories_to_features(db: Session, project_id: str) -> int:
+    """Re-attach stories to the freshly created feature rows.
+
+    Features are deleted and rebuilt by every analysis, so their ids change and each
+    existing story is left pointing at a row that no longer exists. Nothing visible breaks
+    — the feature name is denormalised on the story — but Playwright generation silently
+    stops working, because it reads the selector anchors from the feature.
+
+    Matching is on the feature name, which is derived from the domain and stable across
+    analyses.
+    """
+    features = {
+        feature.name: feature.id
+        for feature in db.scalars(select(Feature).where(Feature.project_id == project_id))
+    }
+    relinked = 0
+    for story in db.scalars(select(UserStory).where(UserStory.project_id == project_id)):
+        target = features.get(story.feature_name)
+        if target and story.feature_id != target:
+            story.feature_id = target
+            relinked += 1
+    if relinked:
+        db.commit()
+    return relinked
+
+
 def run_analysis(analysis_id: str) -> None:
     """In-process job runner, deliberately replaceable by Celery/RQ later."""
     db = SessionLocal()
@@ -342,6 +368,9 @@ def run_analysis(analysis_id: str) -> None:
 
         writer.start("features")
         discovered = group_symbols(symbols)
+        # Layout anchors (navigation, page title, project switcher) belong to no domain
+        # but are reachable from every screen, so every feature gets to use them.
+        shared_anchors = shared_test_ids(symbols)
         db.execute(delete(Feature).where(Feature.project_id == project.id))
         db.add_all(
             [
@@ -357,7 +386,7 @@ def run_analysis(analysis_id: str) -> None:
                         "routes": feature.routes,
                         "components": feature.components,
                         "api_calls": feature.api_calls,
-                        "test_ids": feature.test_ids,
+                        "test_ids": sorted(set(feature.test_ids) | set(shared_anchors)),
                         "has_form": feature.has_form,
                     },
                 )
@@ -365,7 +394,11 @@ def run_analysis(analysis_id: str) -> None:
             ]
         )
         db.commit()
-        writer.complete("features", f"{len(discovered)} domaines fonctionnels")
+        relinked = _relink_stories_to_features(db, project.id)
+        detail = f"{len(discovered)} domaines fonctionnels"
+        if relinked:
+            detail = f"{detail} · {relinked} stories réassociées"
+        writer.complete("features", detail)
 
         generation_error = _generate_backlog(db, project, writer)
 

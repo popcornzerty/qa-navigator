@@ -144,3 +144,48 @@ def test_unimplemented_actions_report_501(tmp_path: Path):
         _create_project(client, repo, "Unimplemented")
         assert client.post(f"{PREFIX}/tests/pw-001/run").status_code == 404
         assert client.get(f"{PREFIX}/stories/US-404").status_code == 404
+
+
+def test_reanalysis_keeps_stories_attached_to_their_feature(tmp_path: Path):
+    """Features are rebuilt on every analysis; stories must not be left orphaned.
+
+    A dangling feature_id breaks nothing visibly — the feature name is denormalised — but
+    Playwright generation stops working, since it reads its selector anchors there.
+    """
+    from sqlalchemy import select
+
+    from qa_engine.database import SessionLocal
+    from qa_engine.models import Feature, UserStory
+
+    repo = _repository(tmp_path, "relink")
+
+    with TestClient(app) as client:
+        project_id = _create_project(client, repo, "Relink")
+        client.post(f"{PREFIX}/analyses", json={"project_id": project_id})
+
+        db = SessionLocal()
+        try:
+            feature = db.scalar(select(Feature).where(Feature.project_id == project_id))
+            assert feature is not None
+            db.add(
+                UserStory(
+                    id="US-900",
+                    project_id=project_id,
+                    feature_id=feature.id,
+                    feature_name=feature.name,
+                    title="Story attachée",
+                )
+            )
+            db.commit()
+        finally:
+            db.close()
+
+        client.post(f"{PREFIX}/analyses", json={"project_id": project_id, "force": True})
+
+        db = SessionLocal()
+        try:
+            story = db.get(UserStory, "US-900")
+            live = {row.id for row in db.scalars(select(Feature).where(Feature.project_id == project_id))}
+            assert story.feature_id in live, "the story lost its feature after re-analysis"
+        finally:
+            db.close()

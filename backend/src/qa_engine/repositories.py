@@ -11,6 +11,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 
+from qa_engine.config import settings
+
 try:
     import pathspec
 except ImportError:  # pragma: no cover - dependency is declared, fallback keeps the service usable
@@ -70,6 +72,20 @@ class LocalRepositoryProvider(RepositoryProvider):
     def _is_ignored(self, relative: Path) -> bool:
         return bool(self._ignore_spec and self._ignore_spec.match_file(relative.as_posix()))
 
+    def _is_engine_artifact(self, directory: Path) -> bool:
+        """True for the engine's own work directory.
+
+        In a monorepo the engine lives inside the repository it analyses, and its work
+        directory holds clones of other repositories — including, potentially, a clone of
+        this very one. Scanning it would double every result.
+        """
+        try:
+            resolved = directory.resolve()
+        except OSError:
+            return False
+        work_root = settings.work_root
+        return resolved == work_root or work_root in resolved.parents or resolved in (work_root,)
+
     @staticmethod
     def _is_binary(path: Path) -> bool:
         if mimetypes.guess_type(path.name)[0] and not mimetypes.guess_type(path.name)[0].startswith("text/"):
@@ -88,6 +104,7 @@ class LocalRepositoryProvider(RepositoryProvider):
                 for directory in dirs
                 if directory not in EXCLUDED_DIRS
                 and not self._is_ignored((current / directory).relative_to(self.root))
+                and not self._is_engine_artifact(current / directory)
             ]
             for filename in files:
                 absolute = current / filename

@@ -14,16 +14,16 @@ test.describe("Projets", () => {
       // TODO manuel : étape non automatisable avec les éléments détectés
     });
     await test.step("Et Le bouton 'Analyser' est visible dans l'interface.", async () => {
-      // TODO manuel : étape non automatisable avec les éléments détectés
+      page.getByTestId('project-analyze').click();
     });
     await test.step("Quand L'utilisateur clique sur le bouton 'Analyser'.", async () => {
-      // TODO manuel : étape non automatisable avec les éléments détectés
+      expect(page).toHaveURL('/projects/$projectId/analysis');
     });
     await test.step("Alors La route '/projects/$projectId/analysis' s'affiche.", async () => {
-      await page.goto('/projects/$projectId/analysis');
+      expect(page.getByText('Repository analysis — AI QA Agent')).toBeVisible();
     });
     await test.step("Et L'en-tête de la page affiche le titre 'Repository analysis — AI QA Agent'.", async () => {
-      await expect(page.getByText('Repository analysis — AI QA Agent')).toBeVisible();
+      // TODO manuel : étape non automatisable avec les éléments détectés
     });
     await test.step("Et La liste des étapes du pipeline (repository, architecture, routes, etc.) est visible.", async () => {
       // TODO manuel : étape non automatisable avec les éléments détectés

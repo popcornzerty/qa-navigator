@@ -89,3 +89,33 @@ def test_a_generated_route_manifest_does_not_absorb_every_route():
     features = group_symbols(extract_symbols(manifest, "src/routeTree.gen.ts"))
     names = {feature.name for feature in features}
     assert {"Panier", "Commande", "Commandes"} <= names
+
+
+def test_layout_anchors_are_shared_across_features():
+    """Navigation lives in a layout file that belongs to no domain; its anchors must survive."""
+    from qa_engine.features import shared_test_ids
+
+    layout = 'export const AppSidebar = () => <nav data-testid="nav-backlog" />;'
+    cart = 'export const CartPage = () => <Route path="/cart" data-testid="cart-total" />;'
+    symbols = [
+        *extract_symbols(layout, "src/components/layout/app-sidebar.tsx"),
+        *extract_symbols(cart, "src/routes/cart.tsx"),
+    ]
+
+    shared = shared_test_ids(symbols)
+    assert shared == ["nav-backlog"]
+    # An anchor that belongs to a real domain is not duplicated into the shared set.
+    assert "cart-total" not in shared
+
+
+def test_anchors_declared_as_constants_are_detected():
+    """Navigation anchors usually live in a list, leaving the attribute itself dynamic."""
+    source = """
+    const NAV = [
+      { to: "/backlog", label: "Backlog", testId: "nav-backlog" },
+      { to: "/coverage", label: "Coverage", testId: "nav-coverage" },
+    ];
+    export const Sidebar = () => <nav>{NAV.map((i) => <a data-testid={i.testId} />)}</nav>;
+    """
+    found = {s.name for s in extract_symbols(source, "src/components/layout/nav.tsx") if s.kind == "testid"}
+    assert found == {"nav-backlog", "nav-coverage"}

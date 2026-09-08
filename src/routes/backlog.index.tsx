@@ -99,7 +99,12 @@ function BacklogPage() {
         title="Backlog"
         subtitle="Generated User Stories awaiting review, approval and synchronisation"
         actions={
-          <Button variant="outline" size="sm" onClick={() => setImportOpen(true)}>
+          <Button
+            variant="outline"
+            size="sm"
+            data-testid="jira-import-open"
+            onClick={() => setImportOpen(true)}
+          >
             Import from Jira
           </Button>
         }
@@ -117,6 +122,7 @@ function BacklogPage() {
               onChange={(event) => setSearch(event.target.value)}
               placeholder="Search story or feature"
               aria-label="Search user stories"
+              data-testid="backlog-search"
               className="w-48 rounded-md bg-panel2 px-3 py-1.5 text-xs ring-1 ring-line outline-none focus:ring-primary/50"
             />
           }
@@ -160,7 +166,7 @@ function BacklogPage() {
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table data-testid="backlog-table" className="w-full text-sm">
             <thead>
               <tr className="border-b border-line text-left text-[11px] tracking-wider text-dim uppercase">
                 <th className="px-4 py-2 font-medium">Feature</th>
@@ -178,7 +184,11 @@ function BacklogPage() {
                 const covered = story.acceptanceCriteria.filter((c) => c.covered).length;
                 const automated = testsByStory.get(story.id) ?? 0;
                 return (
-                  <tr key={story.id} className="transition-colors hover:bg-panel2">
+                  <tr
+                    key={story.id}
+                    data-testid="story-row"
+                    className="transition-colors hover:bg-panel2"
+                  >
                     <td className="px-4 py-3 whitespace-nowrap text-muted-foreground">
                       {story.featureName}
                     </td>
@@ -186,6 +196,7 @@ function BacklogPage() {
                       <Link
                         to="/backlog/$storyId"
                         params={{ storyId: story.id }}
+                        data-testid="story-link"
                         className="group block"
                       >
                         <span className="font-mono text-[11px] text-primary">{story.id}</span>
@@ -327,6 +338,7 @@ function JiraImportDialog({
           <Button
             variant="primary"
             size="sm"
+            data-testid="jira-import-submit"
             disabled={!projectId || importStories.isPending}
             onClick={() => importStories.mutate()}
           >

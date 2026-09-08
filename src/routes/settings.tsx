@@ -117,6 +117,7 @@ function SettingsForm({ settings }: { settings: ProjectSettings }) {
             </label>
             <input
               id="settings-name"
+              data-testid="settings-project-name"
               value={draft.name}
               onChange={(event) => setDraft({ ...draft, name: event.target.value })}
               className={fieldClass}
@@ -206,6 +207,7 @@ function SettingsForm({ settings }: { settings: ProjectSettings }) {
             </label>
             <input
               id="settings-jira-key"
+              data-testid="settings-jira-key"
               value={draft.jira.projectKey ?? ""}
               placeholder="ATL"
               onChange={(event) =>
@@ -272,6 +274,7 @@ function SettingsForm({ settings }: { settings: ProjectSettings }) {
             </label>
             <input
               id="settings-base-url"
+              data-testid="settings-base-url"
               value={draft.playwright.baseUrl}
               onChange={(event) =>
                 setDraft({

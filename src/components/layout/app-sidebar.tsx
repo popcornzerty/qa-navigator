@@ -3,14 +3,17 @@ import { useQuery } from "@tanstack/react-query";
 import { coverageApi } from "../../api";
 import { useCurrentProject } from "../../lib/current-project";
 
+// Test anchors are written out in full rather than derived from the label: static
+// analysis reads them literally, and a template-built value would be invisible to the
+// generator that needs them to reach a screen.
 const NAV = [
-  { to: "/", label: "Dashboard" },
-  { to: "/projects", label: "Projects" },
-  { to: "/backlog", label: "Backlog" },
-  { to: "/gherkin", label: "Gherkin" },
-  { to: "/automation", label: "Automation" },
-  { to: "/coverage", label: "Coverage" },
-  { to: "/settings", label: "Settings" },
+  { to: "/", label: "Dashboard", testId: "nav-dashboard" },
+  { to: "/projects", label: "Projects", testId: "nav-projects" },
+  { to: "/backlog", label: "Backlog", testId: "nav-backlog" },
+  { to: "/gherkin", label: "Gherkin", testId: "nav-gherkin" },
+  { to: "/automation", label: "Automation", testId: "nav-automation" },
+  { to: "/coverage", label: "Coverage", testId: "nav-coverage" },
+  { to: "/settings", label: "Settings", testId: "nav-settings" },
 ] as const;
 
 export function AppSidebar() {
@@ -38,6 +41,7 @@ export function AppSidebar() {
           <Link
             key={item.to}
             to={item.to}
+            data-testid={item.testId}
             activeOptions={{ exact: item.to === "/" }}
             className="flex items-center gap-2.5 rounded-md px-3 py-2 text-muted-foreground hover:text-foreground"
             activeProps={{ className: "bg-panel2 text-foreground ring-1 ring-line" }}

@@ -18,6 +18,7 @@ export function TopBar() {
         <span className="size-2 shrink-0 rounded-sm bg-primary" />
         <select
           id="project-switcher"
+          data-testid="project-switcher"
           className="max-w-[10rem] bg-transparent text-sm font-medium outline-none sm:max-w-none"
           value={current?.id ?? ""}
           onChange={(event) => setProjectId(event.target.value)}
@@ -31,9 +32,7 @@ export function TopBar() {
         <span className="font-mono text-[11px] text-dim">{current?.branch ?? "—"}</span>
       </div>
 
-      <span className="hidden font-mono text-[11px] text-dim md:inline">
-        workspace / atlas-qa
-      </span>
+      <span className="hidden font-mono text-[11px] text-dim md:inline">workspace / atlas-qa</span>
 
       <div className="ml-auto flex items-center gap-2">
         <button

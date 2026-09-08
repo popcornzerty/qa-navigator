@@ -69,9 +69,9 @@ def test_non_playwright_line_is_rejected():
 def test_spec_is_runnable_when_every_step_is_grounded(tmp_path: Path, monkeypatch):
     payload = {
         "etapes": [
-            {"index": 0, "code": ['await page.goto("/cart");']},
-            {"index": 1, "code": ['await page.getByTestId("cart-line").click();']},
-            {"index": 2, "code": ['await expect(page.getByTestId("cart-total")).toBeVisible();']},
+            {"index": 1, "code": ['await page.goto("/cart");']},
+            {"index": 2, "code": ['await page.getByTestId("cart-line").click();']},
+            {"index": 3, "code": ['await expect(page.getByTestId("cart-total")).toBeVisible();']},
         ]
     }
     monkeypatch.setattr(playwright_gen.ollama, "chat_json", lambda *a, **k: payload)
@@ -99,9 +99,9 @@ def test_spec_is_runnable_when_every_step_is_grounded(tmp_path: Path, monkeypatc
 def test_ungrounded_step_marks_the_test_as_fixme(tmp_path: Path, monkeypatch):
     payload = {
         "etapes": [
-            {"index": 0, "code": ['await page.goto("/cart");']},
-            {"index": 1, "code": ['await page.getByTestId("inexistant").click();']},
-            {"index": 2, "code": []},
+            {"index": 1, "code": ['await page.goto("/cart");']},
+            {"index": 2, "code": ['await page.getByTestId("inexistant").click();']},
+            {"index": 3, "code": []},
         ]
     }
     monkeypatch.setattr(playwright_gen.ollama, "chat_json", lambda *a, **k: payload)
@@ -140,3 +140,44 @@ def test_scenario_name_with_quotes_does_not_break_the_file(tmp_path: Path, monke
     )
 
     assert '\\"Analyser\\"' in spec.source
+
+
+def test_step_indices_are_one_based(tmp_path: Path, monkeypatch):
+    """The prompt numbers steps from 1; an off-by-one puts assertions under "Quand"."""
+    payload = {"etapes": [{"index": 1, "code": ['await page.goto("/cart");']}]}
+    monkeypatch.setattr(playwright_gen.ollama, "chat_json", lambda *a, **k: payload)
+
+    spec = playwright_gen.generate_spec(
+        _context(tmp_path),
+        story_id="US-010",
+        story_title="Story",
+        scenario_id="US-010-SC-1",
+        scenario_name="Scénario",
+        given=["le panier est ouvert"],
+        when=["rien"],
+        then=["rien"],
+        base_url="http://localhost:8080",
+    )
+
+    first, rest = spec.source.split('await test.step("Quand', 1)
+    assert 'await page.goto("/cart");' in first, "step 1 code landed on the wrong step"
+    assert "TODO manuel" in rest
+
+
+def test_out_of_range_index_is_ignored(tmp_path: Path, monkeypatch):
+    payload = {"etapes": [{"index": 99, "code": ['await page.goto("/cart");']}]}
+    monkeypatch.setattr(playwright_gen.ollama, "chat_json", lambda *a, **k: payload)
+
+    spec = playwright_gen.generate_spec(
+        _context(tmp_path),
+        story_id="US-011",
+        story_title="Story",
+        scenario_id="US-011-SC-1",
+        scenario_name="Scénario",
+        given=["contexte"],
+        when=[],
+        then=[],
+        base_url="http://localhost:8080",
+    )
+    assert not spec.is_runnable
+    assert "page.goto" not in spec.source

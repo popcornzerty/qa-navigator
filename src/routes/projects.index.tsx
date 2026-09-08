@@ -15,7 +15,8 @@ export const Route = createFileRoute("/projects/")({
       { title: "Projects — AI QA Agent" },
       {
         name: "description",
-        content: "All connected repositories with branch, Jira status, last analysis and QA volumes.",
+        content:
+          "All connected repositories with branch, Jira status, last analysis and QA volumes.",
       },
       { property: "og:title", content: "Projects — AI QA Agent" },
       {
@@ -49,7 +50,7 @@ function ProjectsPage() {
         title="Projects"
         subtitle="Repositories under functional QA"
         actions={
-          <Link to="/projects/new">
+          <Link to="/projects/new" data-testid="new-project">
             <Button variant="primary">+ New Project</Button>
           </Link>
         }
@@ -58,7 +59,7 @@ function ProjectsPage() {
       <Panel>
         <PanelHeader title="All projects" meta={`${projects.length} total`} />
         <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+          <table data-testid="projects-table" className="w-full text-sm">
             <thead>
               <tr className="border-b border-line text-left text-[11px] tracking-wider text-dim uppercase">
                 <th className="px-4 py-2 font-medium">Project</th>
@@ -74,7 +75,11 @@ function ProjectsPage() {
             </thead>
             <tbody className="divide-y divide-line">
               {projects.map((project) => (
-                <tr key={project.id} className="transition-colors hover:bg-panel2">
+                <tr
+                  key={project.id}
+                  data-testid="project-row"
+                  className="transition-colors hover:bg-panel2"
+                >
                   <td className="px-4 py-3 font-medium">{project.name}</td>
                   <td className="px-3 py-3 font-mono text-[11px] text-muted-foreground">
                     {project.repository}
@@ -84,7 +89,9 @@ function ProjectsPage() {
                   </td>
                   <td className="px-3 py-3">
                     {project.jiraProject ? (
-                      <span className="font-mono text-[11px] text-primary">{project.jiraProject}</span>
+                      <span className="font-mono text-[11px] text-primary">
+                        {project.jiraProject}
+                      </span>
                     ) : (
                       <StatusBadge status={project.jiraConnection} />
                     )}
@@ -92,7 +99,9 @@ function ProjectsPage() {
                   <td className="px-3 py-3 text-muted-foreground">
                     {formatDate(project.lastAnalysis)}
                   </td>
-                  <td className="px-3 py-3 font-mono text-muted-foreground">{project.storyCount}</td>
+                  <td className="px-3 py-3 font-mono text-muted-foreground">
+                    {project.storyCount}
+                  </td>
                   <td className="px-3 py-3 font-mono text-muted-foreground">
                     {project.automatedTestCount}
                   </td>
@@ -106,20 +115,21 @@ function ProjectsPage() {
                         params={{ projectId: project.id }}
                         onClick={() => setProjectId(project.id)}
                       >
-                        <Button variant="outline" size="sm">
+                        <Button variant="outline" size="sm" data-testid="project-open">
                           Open
                         </Button>
                       </Link>
                       <Button
                         variant="subtle"
                         size="sm"
+                        data-testid="project-analyze"
                         disabled={analyze.isPending}
                         onClick={() => analyze.mutate(project.id)}
                       >
                         Analyze
                       </Button>
                       <Link to="/settings" onClick={() => setProjectId(project.id)}>
-                        <Button variant="ghost" size="sm">
+                        <Button variant="ghost" size="sm" data-testid="project-settings">
                           Settings
                         </Button>
                       </Link>

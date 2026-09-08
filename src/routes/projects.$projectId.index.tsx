@@ -68,7 +68,12 @@ function ProjectDetail() {
         actions={
           <>
             {project.data ? <StatusBadge status={project.data.status} /> : null}
-            <Button variant="primary" disabled={analyze.isPending} onClick={() => analyze.mutate()}>
+            <Button
+              variant="primary"
+              data-testid="analyze-repository"
+              disabled={analyze.isPending}
+              onClick={() => analyze.mutate()}
+            >
               Analyze Repository
             </Button>
           </>
