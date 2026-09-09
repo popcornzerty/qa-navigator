@@ -449,8 +449,11 @@ def test_the_prompt_lists_the_directly_reachable_routes(tmp_path: Path, monkeypa
         base_url="http://localhost:8080",
     )
 
-    assert "Routes ouvrables directement par page.goto : /cart" in captured[0]
+    assert "Adresses connues de l'application : /cart" in captured[0]
     assert "/cart/$itemId" not in captured[0]
+    # The prompt has to say the list is exhaustive: a model given routes but no rule
+    # treats them as examples and writes a plausible-looking fifth one.
+    assert "SEULES adresses valides" in captured[0]
 
 
 def test_a_step_keeps_its_working_assertions_when_some_are_dropped(tmp_path: Path, monkeypatch):
@@ -505,3 +508,116 @@ def test_a_step_with_nothing_executable_still_blocks(tmp_path: Path, monkeypatch
 
     assert not spec.is_runnable
     assert "test.fixme()" in spec.source
+
+
+class TestHashAddresses:
+    """An application navigating by hash has real addresses; dropping them invited invention."""
+
+    def test_a_hash_is_the_address_not_a_fragment_to_discard(self):
+        assert playwright_gen.normalise_route("#cgu") == "#cgu"
+        assert playwright_gen.normalise_route("http://localhost:5180/#cgu") == "#cgu"
+
+    def test_hash_routes_no_longer_collapse_onto_the_root(self):
+        """All four legal pages became `/`, leaving one allowed address for four pages."""
+        routes = ["#a-propos", "#cgu", "#confidentialite", "#mentions-legales"]
+        assert playwright_gen.reachable_routes(routes) == set(routes)
+
+    def test_a_plain_path_is_unaffected(self):
+        assert playwright_gen.normalise_route("/projects/") == "/projects"
+        assert playwright_gen.normalise_route("http://x/projects?a=1") == "/projects"
+
+
+class TestUrlAssertions:
+    ALLOWED = {"#cgu", "/"}
+
+    def test_an_invented_address_is_refused(self):
+        """`toHaveURL('/about')` on an app with no `/about` fails on a page never built."""
+        accepted, reason = playwright_gen.validate_line(
+            "await expect(page).toHaveURL('/about');", set(), self.ALLOWED
+        )
+        assert accepted is None
+        assert "/about" in reason
+
+    def test_a_known_address_passes(self):
+        accepted, _ = playwright_gen.validate_line(
+            "await expect(page).toHaveURL('#cgu');", set(), self.ALLOWED
+        )
+        assert accepted is not None
+
+    def test_navigation_is_still_checked_too(self):
+        accepted, _ = playwright_gen.validate_line(
+            "await page.goto('/about');", set(), self.ALLOWED
+        )
+        assert accepted is None
+
+
+class TestLocatorsAreAnchored:
+    """Playwright matches text by substring, and refuses a step that hits several nodes."""
+
+    def anchor(self, line: str) -> str:
+        return playwright_gen.anchor_text_locators(line)
+
+    def test_a_bare_text_locator_becomes_exact(self):
+        assert self.anchor("page.getByText('Confidentialité').click();") == (
+            "page.getByText('Confidentialité', { exact: true }).click();"
+        )
+
+    def test_an_already_exact_locator_is_left_alone(self):
+        line = "page.getByText('X', { exact: true }).click();"
+        assert self.anchor(line) == line
+
+    def test_a_role_name_becomes_exact(self):
+        assert self.anchor("page.getByRole('button', { name: 'Confidentialité' }).click();") == (
+            "page.getByRole('button', { name: 'Confidentialité', exact: true }).click();"
+        )
+
+    def test_a_role_without_a_name_is_left_alone(self):
+        line = "page.getByRole('table').click();"
+        assert self.anchor(line) == line
+
+    def test_a_testid_is_untouched(self):
+        """An anchor is already unambiguous; `exact` on it would mean nothing."""
+        line = "page.getByTestId('nav-cgu').click();"
+        assert self.anchor(line) == line
+
+    def test_the_repair_happens_during_validation(self):
+        accepted, _ = playwright_gen.validate_line("page.getByText('CGU').click();", set(), None)
+        assert "exact: true" in accepted
+
+
+def test_the_hydration_rule_is_offered_only_when_the_anchor_exists(tmp_path: Path, monkeypatch):
+    """Stated unconditionally, it was followed unconditionally.
+
+    Every step then opened with a `waitFor` on an anchor the repository does not have, and
+    every one of them was rejected — a spec whose manual TODOs described nothing but the
+    instruction that produced them.
+    """
+    captured: list[str] = []
+
+    def capture(_system, prompt, _schema, **kwargs):
+        captured.append(prompt)
+        return {"etapes": []}
+
+    monkeypatch.setattr(playwright_gen.ollama, "chat_json", capture)
+
+    without = SimpleNamespace(
+        name="Frontend", description="", routes=["/"], components=[], api_calls=[],
+        test_ids=["nav-home"], has_form=False, source_files=[], excerpts=[],
+    )
+    playwright_gen.generate_spec(
+        without, story_id="US-050", story_title="T", scenario_id="US-050-SC-1",
+        scenario_name="S", given=["a"], when=[], then=[], base_url="http://localhost:8080",
+    )
+    # An empty answer is retried, so one generation produces more than one prompt.
+    assert captured and not any("app-ready" in prompt for prompt in captured)
+    captured.clear()
+
+    with_anchor = SimpleNamespace(
+        name="Frontend", description="", routes=["/"], components=[], api_calls=[],
+        test_ids=["nav-home", "app-ready"], has_form=False, source_files=[], excerpts=[],
+    )
+    playwright_gen.generate_spec(
+        with_anchor, story_id="US-051", story_title="T", scenario_id="US-051-SC-1",
+        scenario_name="S", given=["a"], when=[], then=[], base_url="http://localhost:8080",
+    )
+    assert captured and all("app-ready" in prompt for prompt in captured)

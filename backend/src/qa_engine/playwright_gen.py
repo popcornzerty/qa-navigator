@@ -39,6 +39,23 @@ TESTID_CALL = re.compile(r"getByTestId\(\s*['\"]([^'\"]+)['\"]\s*\)")
 # must not be, so they are excluded.
 NEEDS_AWAIT = re.compile(r"^(?:expect\(|page\.)")
 
+# The anchor a server-rendered app exposes once React has attached its handlers.
+HYDRATION_ANCHOR = "app-ready"
+
+# `getByText` and `getByRole`'s name match on *substring* by default, so a label that is a
+# fragment of any other visible text resolves to several elements and Playwright refuses
+# the whole step in strict mode: "Confidentialité" matched its own menu button and two
+# paragraphs merely containing the word. Nothing about the intent is ambiguous — the
+# generator meant that exact label — so the option is added rather than the line rejected.
+# Repositories without `data-testid` fall back to these locators for everything, which is
+# precisely where the ambiguity bites.
+TEXT_LOCATOR = re.compile(
+    r"\bgetBy(?:Text|Label|Placeholder|Title)\(\s*(['\"`])(?:\\.|(?!\1)[^\\])*\1\s*(?=\))"
+)
+ROLE_LOCATOR = re.compile(
+    r"\bgetByRole\(\s*(['\"`])[^'\"`]+\1\s*,\s*\{(?![^}]*\bexact\b)[^}]*\bname\s*:[^}]*(?=\})"
+)
+
 # A quoted path still holding a route parameter: `/projects/$projectId/analysis`,
 # `/users/:id`, `/posts/{slug}`, `/files/[name]`, or an unexpanded `${…}` template.
 UNRESOLVED_ROUTE_PARAMETER = re.compile(
@@ -120,13 +137,27 @@ def flatten_steps(given: list[str], when: list[str], then: list[str]) -> list[tu
 
 ROUTE_PLACEHOLDER = re.compile(r"[$:{\[]|\.\.\.")
 GOTO_CALL = re.compile(r"\bpage\.goto\(\s*['\"`]([^'\"`]+)['\"`]")
+# `toHaveURL` asserts an address just as `goto` visits one. Unchecked, a model that could
+# not find a real route asserted an invented one instead — a test that fails on a page
+# which never existed, and blames the application for it.
+URL_ASSERTION = re.compile(r"\btoHaveURL\(\s*['\"`]([^'\"`]+)['\"`]")
 
 
 def normalise_route(value: str) -> str:
-    """Path of a URL, without origin, query or trailing slash."""
+    """Address of a URL, without origin, query or trailing slash.
+
+    The fragment is kept when there is one. In an application that navigates by hash,
+    `#cgu` *is* the page — dropping it collapsed every such route onto `/`, so a model was
+    handed a single allowed address for a repository that had four, and invented the rest.
+    """
     path = re.sub(r"^[a-zA-Z]+://[^/]+", "", value.strip())
-    path = path.split("?")[0].split("#")[0]
-    return path.rstrip("/") or "/"
+    path = path.split("?")[0]
+    path, _, fragment = path.partition("#")
+    path = path.rstrip("/")
+    if fragment:
+        # `/#cgu` and `#cgu` name the same page; the hash alone is the stable form.
+        return f"#{fragment}"
+    return path or "/"
 
 
 def reachable_routes(routes: list[str]) -> set[str]:
@@ -178,16 +209,36 @@ def validate_line(
                     f"« {path} » n'est pas atteignable par URL directe "
                     "(navigue par l'interface)"
                 )
+        asserted = URL_ASSERTION.search(candidate)
+        if asserted:
+            path = normalise_route(asserted.group(1))
+            if path not in allowed_routes:
+                return None, f"« {path} » n'est pas une adresse connue de l'application"
 
     for test_id in TESTID_CALL.findall(candidate):
         if test_id not in known_test_ids:
             return None, f'data-testid "{test_id}" introuvable dans le code analysé'
+
+    candidate = anchor_text_locators(candidate)
 
     # An un-awaited `expect(...)` returns a promise nobody resolves: it asserts nothing and
     # the test still reports green. The intent is unambiguous, so repair rather than reject.
     if NEEDS_AWAIT.match(candidate):
         candidate = f"await {candidate}"
     return candidate, None
+
+
+def anchor_text_locators(line: str) -> str:
+    """Pin text-based locators to the exact label they were written for.
+
+    Playwright matches text by substring, so a short label resolves to every element that
+    merely contains it and strict mode then refuses the step. This is the failure mode of
+    any repository without `data-testid`, where text is the only handle available.
+    """
+    line = TEXT_LOCATOR.sub(lambda match: f"{match.group(0)}, {{ exact: true }}", line)
+    # The match stops before the closing brace, which carries its own spacing; trimming
+    # keeps the result readable, since this is code someone will read.
+    return ROLE_LOCATOR.sub(lambda match: f"{match.group(0).rstrip()}, exact: true ", line)
 
 
 def _build_prompt(
@@ -207,11 +258,24 @@ def _build_prompt(
     )
     direct = sorted(reachable_routes(context.routes))
     routes = ", ".join(direct) if direct else "aucune"
+
+    # Offered only when the anchor exists. Stated unconditionally, the rule was followed
+    # unconditionally: every generated step opened with a `waitFor` on an anchor the
+    # repository does not have, and every one of them was then rejected — a spec full of
+    # manual TODOs that describe nothing but the instruction that produced them.
+    hydration_rule = (
+        "- fais suivre chaque `page.goto(...)` de "
+        "`await page.getByTestId('app-ready').waitFor();` : l'application est rendue côté "
+        "serveur et un clic avant l'hydratation ne déclenche rien ;\n"
+        if HYDRATION_ANCHOR in context.test_ids
+        else ""
+    )
     return (
         f"Application testée : {base_url}\n"
-        f"Routes ouvrables directement par page.goto : {routes}\n"
-        "Toute autre page contient un paramètre dans son URL et ne s'atteint qu'en "
-        "naviguant depuis l'une de ces routes.\n"
+        f"Adresses connues de l'application : {routes}\n"
+        "Ce sont les SEULES adresses valides : n'en invente aucune autre, ni dans un "
+        "`page.goto(...)`, ni dans un `toHaveURL(...)`. Toute autre page contient un "
+        "paramètre dans son URL et ne s'atteint qu'en naviguant depuis l'une d'elles.\n"
         f"Ancres data-testid réellement présentes dans le code : {anchors}\n\n"
         f"USER STORY : {story_title}\n"
         f"SCÉNARIO : {scenario_name}\n"
@@ -219,9 +283,7 @@ def _build_prompt(
         "Pour chaque étape, donne les instructions Playwright (TypeScript) qui la réalisent.\n"
         "Règles strictes :\n"
         "- une instruction par chaîne, terminée par un point-virgule ;\n"
-        "- si l'ancre `app-ready` est disponible, fais suivre chaque `page.goto(...)` de "
-        "`await page.getByTestId('app-ready').waitFor();` : l'application est rendue côté "
-        "serveur et un clic avant l'hydratation ne déclenche rien ;\n"
+        f"{hydration_rule}"
         "- `page.goto(...)` n'accepte qu'une URL **concrète**. Une route contenant un "
         "paramètre (`/projects/$projectId`, `/users/:id`) ne peut pas être ouverte "
         "directement : atteins la page en naviguant comme un utilisateur — ouvre la liste, "
@@ -229,8 +291,11 @@ def _build_prompt(
         "- préfixe d'`await` toute assertion et toute action ;\n"
         "- utilise uniquement `page.goto`, `page.getByTestId`, `page.getByRole`, "
         "`page.getByLabel`, `page.getByText`, `page.locator`, et `expect(...)` ;\n"
-        "- pour les sélecteurs, n'utilise QUE les ancres data-testid listées ci-dessus. "
-        "Si aucune ne convient, utilise `page.getByRole` avec le libellé visible ;\n"
+        "- pour les sélecteurs, privilégie les ancres data-testid listées ci-dessus. "
+        "Si aucune ne convient, utilise `page.getByRole('button' | 'link' | ..., "
+        "{ name: 'libellé', exact: true })` : le rôle dit ce que l'élément EST, là où "
+        "`getByText` attrape aussi le moindre paragraphe contenant le mot et fait échouer "
+        "l'étape entière. Mets toujours `exact: true` sur un libellé ;\n"
         "- les étapes « Alors » ne contiennent que des `expect(...)` ;\n"
         "- n'écris aucun import, aucune déclaration de test, aucun commentaire : "
         "uniquement le corps de chaque étape ;\n"
