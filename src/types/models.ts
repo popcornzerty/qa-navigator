@@ -125,6 +125,7 @@ export type AnalysisStepKey =
   | "routes"
   | "components"
   | "apis"
+  | "existing_tests"
   | "features"
   | "stories"
   | "gherkin";
