@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from dataclasses import dataclass, field
+from itertools import chain
 from pathlib import Path
 
 from qa_engine.repositories import LocalRepositoryProvider, RepositoryFile
@@ -24,6 +25,13 @@ ROUTE_PATTERNS = [
     re.compile(r"<Route[^>]*?\bpath\s*=\s*(['\"])(?P<value>[^'\"]*)\1"),
     re.compile(r"\bpath\s*:\s*(['\"])(?P<value>/[^'\"]*)\1"),
 ]
+
+# An application that navigates by hash has no router to read, yet its addresses are just
+# as real: `#mentions-legales` can be opened directly, and a test can go straight to it.
+# Only read from a file that actually reads `location.hash`, so that a CSS selector such
+# as `querySelector("#total")` is never mistaken for an address.
+HASH_ROUTE = re.compile(r"(['\"])(?P<value>#[A-Za-z][\w-]*)\1")
+USES_LOCATION_HASH = re.compile(r"\blocation\.hash\b|['\"]hashchange['\"]")
 
 # --- Components ----------------------------------------------------------------------
 
@@ -51,9 +59,23 @@ HOOK_DECLARATION = re.compile(
 
 # --- Network calls -------------------------------------------------------------------
 
+# A named client, with one optional wrapper between it and the URL: `fetch(adresse("/x"))`
+# is the same call as `fetch("/x")`, and a codebase that centralises URL building would
+# otherwise be reported as making no network calls at all.
 API_PATTERN = re.compile(
     r"(?P<client>fetch|axios\.(?:get|post|put|patch|delete|request)|axios|"
     r"(?:api|http|client)\.(?:get|post|put|patch|delete))\s*\(\s*"
+    r"(?:[A-Za-z_$][\w$.]*\s*\(\s*)?"
+    r"(?P<quote>['\"`])(?P<url>[^'\"`]+)(?P=quote)"
+)
+
+# A bare helper: `get<Health>("/health")`, `post("/screener/ranking/start")`. The verb on
+# its own is far too common to trust, so what identifies the call is its argument — only a
+# literal already shaped like an endpoint survives the URL check applied to every match.
+# The lookbehind leaves `axios.get(...)` to the pattern above.
+BARE_CLIENT_PATTERN = re.compile(
+    r"(?<![\w.$])(?P<client>get|post|put|patch|delete|del|request|http)"
+    r"\s*(?:<[^<>]*>)?\s*\(\s*"
     r"(?P<quote>['\"`])(?P<url>[^'\"`]+)(?P=quote)"
 )
 
@@ -160,6 +182,17 @@ def extract_symbols(text: str, relative_path: str) -> list[DiscoveredSymbol]:
                 DiscoveredSymbol(value, "route", relative_path, _line_number(text, match.start()))
             )
 
+    if USES_LOCATION_HASH.search(text):
+        for match in HASH_ROUTE.finditer(text):
+            symbols.append(
+                DiscoveredSymbol(
+                    match.group("value"),
+                    "route",
+                    relative_path,
+                    _line_number(text, match.start()),
+                )
+            )
+
     if file_has_jsx:
         for pattern in COMPONENT_DECLARATIONS:
             for match in pattern.finditer(text):
@@ -180,7 +213,7 @@ def extract_symbols(text: str, relative_path: str) -> list[DiscoveredSymbol]:
             DiscoveredSymbol(name, "hook", relative_path, _line_number(text, match.start()))
         )
 
-    for match in API_PATTERN.finditer(text):
+    for match in chain(API_PATTERN.finditer(text), BARE_CLIENT_PATTERN.finditer(text)):
         url = match.group("url")
         if not url.startswith(("/", "http", "${")):
             continue

@@ -139,3 +139,51 @@ def test_an_anchor_written_both_ways_is_reported_once():
     source = 'export const Row = () => <li data-testid="cart-line" />;'
     hits = [s for s in extract_symbols(source, "src/cart.tsx") if s.kind == "testid"]
     assert [s.name for s in hits] == ["cart-line"]
+
+
+def _names(source: str, kind: str) -> set[str]:
+    return {item.name for item in extract_symbols(source, "src/App.tsx") if item.kind == kind}
+
+
+class TestNetworkCalls:
+    def test_a_url_builder_between_the_client_and_the_literal(self):
+        """`fetch(adresse("/auth/login"))` is the same call as `fetch("/auth/login")`.
+
+        A codebase that centralises URL building was reported as making no network calls
+        at all, which read as "this application talks to nothing".
+        """
+        assert "/auth/login" in _names('await fetch(adresse("/auth/login"), { method: "POST" });', "api_call")
+
+    def test_a_bare_helper_with_a_generic(self):
+        source = 'return get<{ quotes: Quote[]; errors: string[] }>("/market/quotes");'
+        assert "/market/quotes" in _names(source, "api_call")
+
+    def test_a_bare_helper_needs_a_url_shaped_argument(self):
+        """`get` alone is far too common a name to treat as a network client."""
+        assert _names('const value = get("firstName");', "api_call") == set()
+        assert _names('const item = request("retry");', "api_call") == set()
+
+    def test_a_template_literal_endpoint(self):
+        assert "/tests?${params}" in _names("return http<Test[]>(`/tests?${params}`);", "api_call")
+
+    def test_a_dotted_client_is_still_read(self):
+        assert "/x" in _names('axios.get("/x");', "api_call")
+
+
+class TestHashRoutes:
+    HASH_APP = """
+    const ADRESSES = { "#a-propos": "apropos", "#cgu": "cgu" };
+    window.addEventListener("hashchange", () => setPage(window.location.hash));
+    """
+
+    def test_an_app_navigating_by_hash_still_has_addresses(self):
+        """No router to read, yet `#cgu` opens directly and a test can go straight to it."""
+        assert _names(self.HASH_APP, "route") == {"#a-propos", "#cgu"}
+
+    def test_a_css_selector_is_not_an_address(self):
+        """Without corroboration, every `querySelector("#id")` would become a route."""
+        source = 'const total = document.querySelector("#total");'
+        assert _names(source, "route") == set()
+
+    def test_path_routes_are_unaffected(self):
+        assert _names('<Route path="/cart" />', "route") == {"/cart"}
