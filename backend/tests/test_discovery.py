@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from qa_engine.discovery import extract_tests, find_config, project_for, relative_to_config
+from qa_engine.discovery import (
+    TITLE_SEPARATOR,
+    extract_tests,
+    find_config,
+    project_for,
+    relative_to_config,
+)
 from qa_engine.execution import grep_for, parse_report
 from qa_engine.repositories import is_test_file, is_test_material
 
@@ -55,8 +61,8 @@ class TestExtraction:
         """
         found = extract_tests(source, "e2e/p.spec.ts")
         assert [item.full_title for item in found] == [
-            "Portefeuille > Dividendes > le badge apparaît",
-            "Portefeuille > la ligne se supprime",
+            f"Portefeuille{TITLE_SEPARATOR}Dividendes{TITLE_SEPARATOR}le badge apparaît",
+            f"Portefeuille{TITLE_SEPARATOR}la ligne se supprime",
         ]
 
     def test_steps_are_not_tests(self):
@@ -234,5 +240,42 @@ class TestAggregation:
 
 
 class TestSelector:
-    def test_a_title_with_regex_characters_selects_only_itself(self):
-        assert grep_for("coût (net) + frais") == r"^coût\ \(net\)\ \+\ frais$"
+    def test_regex_characters_in_a_title_are_neutralised(self):
+        """Unescaped, "coût (net)" would be read as a capture group and match nothing."""
+        assert grep_for("coût (net) + frais") == r" coût \(net\) \+ frais$"
+
+    def test_spaces_are_not_backslash_escaped(self):
+        r"""`\ ` is a syntax error in a Unicode-mode JavaScript regex."""
+        assert r"\ " not in grep_for("deux mots")
+
+    def test_the_display_separator_becomes_a_plain_space(self):
+        """Playwright greps against `<file> <describe> <test>`, joined by spaces.
+
+        The `›` only ever appears in what `--list` prints; building a pattern from the
+        displayed title matches nothing at all.
+        """
+        assert grep_for(f"Portefeuille{TITLE_SEPARATOR}la ligne se supprime") == (
+            " Portefeuille la ligne se supprime$"
+        )
+
+    def test_the_start_is_not_anchored(self):
+        """The grepped string begins with the file path, so `^` never matches."""
+        assert not grep_for("un test").startswith("^")
+
+    def test_a_longer_title_is_not_swept_in(self):
+        """The common case: one title extending another must not be selected too."""
+        import re as _re
+
+        pattern = _re.compile(grep_for("celui-ci passe"))
+        assert pattern.search("a.spec.ts:4:3 Suite celui-ci passe")
+        assert not pattern.search("a.spec.ts:4:3 Suite celui-ci passe aussi")
+
+    def test_a_title_that_is_a_suffix_of_another_over_selects(self):
+        """Documented limit, not an aspiration: end-anchoring cannot separate these.
+
+        Over-selection is confined to the one file being run, and the outcome reports
+        how many tests actually ran, so it is visible rather than silent.
+        """
+        import re as _re
+
+        assert _re.compile(grep_for("passe")).search("a.spec.ts:4:3 Suite celui-ci passe")

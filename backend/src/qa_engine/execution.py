@@ -18,6 +18,8 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from qa_engine.discovery import TITLE_SEPARATOR
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 600
@@ -175,12 +177,28 @@ def parse_report(report: dict, repository_root: Path) -> ExecutionOutcome:
 
 
 def grep_for(title: str) -> str:
-    """An anchored regex selecting exactly one test title.
+    r"""A regex selecting one test out of a file, given its ``describe › test`` path.
 
-    Playwright matches `--grep` against the full title, describe blocks included, so an
-    unescaped title containing brackets or a dot would select the wrong tests — or none.
+    Two things about `--grep` are easy to get wrong, and both make it match nothing:
+
+    * It runs against ``<file path> <describe> <test>`` joined by **plain spaces**. The
+      ``›`` separator only ever appears in what `--list` prints, so a pattern built from
+      the displayed title never matches.
+    * That string starts with the file path, so anchoring at the start never matches
+      either. Only the end is anchored.
+
+    Escaping matters too: a title containing brackets or a dot would otherwise select the
+    wrong tests. Spaces are put back verbatim, since ``\ `` is a syntax error in a
+    Unicode-mode JavaScript regex.
+
+    This selects one test whenever no other title in the file *ends with* the same words:
+    "celui-ci passe" is correctly told apart from "celui-ci passe aussi", but a bare
+    "passe" would also select "celui-ci passe". The spec file is passed to Playwright as
+    well, so any over-selection stays inside one file, and the outcome reports the tally
+    of what actually ran rather than assuming a single test.
     """
-    return f"^{re.escape(title)}$"
+    escaped = re.escape(title.replace(TITLE_SEPARATOR, " ")).replace(r"\ ", " ")
+    return f" {escaped}$"
 
 
 def run_spec(

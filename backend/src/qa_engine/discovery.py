@@ -49,6 +49,11 @@ DESCRIBE_CALL = re.compile(
 )
 DESCRIBE_START = re.compile(r"\b(?:test\.describe|describe)\b")
 
+# Playwright builds a test's full title as `file:line › describe › test`, joined with
+# U+203A. Selecting a single test out of a file means matching that string, so the
+# separator has to be the one Playwright uses and not an ASCII lookalike.
+TITLE_SEPARATOR = " › "
+
 # Playwright config: `name: "bouchonne"` and `testDir: "e2e"` inside a `projects: [...]`.
 PROJECT_NAME = re.compile(r"\bname\s*:\s*(['\"`])(?P<value>[^'\"`]+)\1")
 PROJECT_TESTDIR = re.compile(r"\btestDir\s*:\s*(['\"`])(?P<value>[^'\"`]+)\1")
@@ -69,13 +74,14 @@ class DiscoveredTest:
 
     file: str  # repository-relative, POSIX
     title: str  # the test's own title
-    suite: str  # enclosing describe titles, " > "-joined; empty when top level
+    suite: str  # enclosing describe titles, joined the way Playwright joins them
     line: int
     skipped: bool  # declared with .skip or .fixme
 
     @property
     def full_title(self) -> str:
-        return f"{self.suite} > {self.title}" if self.suite else self.title
+        """The title as Playwright itself prints and matches it."""
+        return f"{self.suite}{TITLE_SEPARATOR}{self.title}" if self.suite else self.title
 
 
 def strip_comments(text: str) -> str:
@@ -107,7 +113,7 @@ def extract_tests(text: str, relative_path: str) -> list[DiscoveredTest]:
                 DiscoveredTest(
                     file=relative_path,
                     title=test_match.group("title"),
-                    suite=" > ".join(title for title, _ in stack),
+                    suite=TITLE_SEPARATOR.join(title for title, _ in stack),
                     line=number,
                     skipped=test_match.group("modifier") in {"skip", "fixme"},
                 )

@@ -67,8 +67,8 @@ def test_an_existing_suite_is_imported_as_runnable_tests(tmp_path: Path):
 
         tests = client.get(f"{PREFIX}/tests?project_id={project_id}").json()
         assert [item["scenario"] for item in tests] == [
-            "Portefeuille > la valorisation totale s'affiche",
-            "Portefeuille > une ligne se supprime",
+            "Portefeuille › la valorisation totale s'affiche",
+            "Portefeuille › une ligne se supprime",
         ]
         assert {item["origin"] for item in tests} == {"discovered"}
         # No story is invented to satisfy the schema.
