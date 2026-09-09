@@ -398,6 +398,7 @@ def import_existing_tests(db: Session, project: Project) -> tuple[int, int]:
                 db.add(row)
                 db.flush()  # so the next next_reference() sees this id
             row.scenario = test.full_title
+            row.line = test.line
             row.working_directory = working_directory
             row.playwright_project = playwright_project
             imported += 1
@@ -880,4 +881,28 @@ def recover_interrupted_analyses(db: Session) -> int:
     if stranded:
         db.commit()
         logger.warning("Recovered %d analysis(es) interrupted by a restart", len(stranded))
+    return len(stranded)
+
+
+def recover_interrupted_runs(db: Session) -> int:
+    """Release tests left `running` by an engine that stopped mid-execution.
+
+    Same failure as an interrupted analysis, one level down: the Playwright subprocess
+    dies with the service, and the row keeps saying the run is in flight. The UI would
+    then poll a test that nothing is executing, for ever.
+
+    The previous verdict is not restored — it is no longer known to hold — so the test
+    goes back to `not_run` and says why.
+    """
+    stranded = list(db.scalars(select(PlaywrightTest).where(PlaywrightTest.test_status == "running")))
+    for test in stranded:
+        test.test_status = "not_run"
+        test.result = {
+            **(test.result or {}),
+            "status": "not_run",
+            "error_message": "Exécution interrompue par un arrêt du moteur. Relancez le test.",
+        }
+    if stranded:
+        db.commit()
+        logger.warning("Released %d test run(s) interrupted by a restart", len(stranded))
     return len(stranded)

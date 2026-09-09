@@ -6,6 +6,8 @@ shapes have a single definition point.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -80,6 +82,44 @@ def analysis(row: models.Analysis) -> schemas.AnalysisRead:
         summary=row.summary,
         completed_at=row.completed_at,
     )
+
+
+
+# A generated spec is stored in the database because the engine wrote it and regeneration
+# replaces it. An imported one is read from disk instead: it belongs to its author, who may
+# edit it between two runs, and storing it would show a stale copy — and would duplicate a
+# single file once per test it contains.
+MAX_SOURCE_BYTES = 400_000
+
+
+def test_detail(
+    row: models.PlaywrightTest,
+    story_row: models.UserStory | None,
+    repository_path: str | None,
+) -> schemas.PlaywrightTestDetailRead:
+    base = test(row, story_row).model_dump()
+    source, error = _read_source(row, repository_path)
+    return schemas.PlaywrightTestDetailRead(**base, source=source, line=row.line, source_error=error)
+
+
+def _read_source(
+    row: models.PlaywrightTest, repository_path: str | None
+) -> tuple[str, str | None]:
+    if row.origin != "discovered":
+        return row.source or "", None
+    if not repository_path:
+        return "", "Le dépôt de ce projet est introuvable."
+
+    path = Path(repository_path) / row.file
+    try:
+        if path.stat().st_size > MAX_SOURCE_BYTES:
+            return "", f"Fichier trop volumineux pour être affiché ({path.stat().st_size} octets)."
+        return path.read_text(encoding="utf-8"), None
+    except FileNotFoundError:
+        # The file was moved or deleted since the last analysis.
+        return "", f"Fichier introuvable : {row.file}. Relancez une analyse."
+    except (OSError, UnicodeDecodeError) as exc:
+        return "", f"Lecture impossible : {exc}"
 
 
 def feature(row: models.Feature) -> schemas.FeatureRead:

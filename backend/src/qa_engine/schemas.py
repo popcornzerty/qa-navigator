@@ -18,7 +18,9 @@ AnalysisStatus = Literal["queued", "running", "completed", "failed"]
 StepStatus = Literal["pending", "running", "completed", "failed"]
 StoryStatus = Literal["draft", "needs_review", "approved", "created", "out_of_sync"]
 GherkinStatus = Literal["draft", "valid", "invalid", "automated"]
-TestStatus = Literal["passed", "failed", "skipped", "not_run"]
+# `running` is what lets the UI tell a run in flight from a stale result: without it a
+# test keeps its previous verdict while executing, and nothing on screen moves.
+TestStatus = Literal["passed", "failed", "skipped", "not_run", "running"]
 JiraConnection = Literal["not_connected", "connected"]
 
 
@@ -263,6 +265,18 @@ class PlaywrightTestRead(Wire):
     last_run: datetime | None
     duration_ms: int
     result: TestResultRead
+
+
+class PlaywrightTestDetailRead(PlaywrightTestRead):
+    """One test, with the code that defines it.
+
+    The source is kept out of the list response on purpose: a suite of a hundred imported
+    tests would otherwise ship every spec file, repeatedly, on every poll.
+    """
+
+    source: str = ""
+    line: int | None = None
+    source_error: str | None = None
 
 
 class JobRead(Wire):

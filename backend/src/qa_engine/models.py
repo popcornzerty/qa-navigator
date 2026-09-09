@@ -144,6 +144,10 @@ class PlaywrightTest(Base):
     # Selects this test inside its file. Discovered files hold many tests; the title is
     # used rather than the line number so an edit above it does not retarget the run.
     selector: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Line the test is declared on, so the UI can point at it inside a file that may hold
+    # dozens. Advisory only: nothing selects a test by line, since an edit above it would
+    # then run the wrong one.
+    line: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Directory Playwright runs from, relative to the repository. In a monorepo the config
     # sits beside the application it tests, not at the root.
     working_directory: Mapped[str] = mapped_column(String(500), default="")

@@ -34,6 +34,7 @@ const BANNER: Record<TestStatus, string> = {
   failed: "bg-fail/10 text-fail ring-fail/30",
   skipped: "bg-skip/10 text-skip ring-skip/30",
   not_run: "bg-panel2 text-muted-foreground ring-line",
+  running: "bg-primary/10 text-primary ring-primary/30",
 };
 
 function TestDetailPage() {
@@ -43,6 +44,9 @@ function TestDetailPage() {
   const { data: test, isLoading } = useQuery({
     queryKey: ["test", testId],
     queryFn: () => testsApi.get(testId),
+    // A run happens in a subprocess with no progress stream, so the row's status is the
+    // only signal. Poll while it says `running`, and stop the moment it settles.
+    refetchInterval: (query) => (query.state.data?.status === "running" ? 1000 : false),
   });
 
   const { data: story } = useQuery({
@@ -53,11 +57,11 @@ function TestDetailPage() {
 
   const run = useMutation({
     mutationFn: () => testsApi.run(testId),
-    onSuccess: (job) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["test", testId] });
-      toast.success(`Execution queued (${job.jobId})`);
+      toast.success("Execution started");
     },
-    onError: () => toast.error("Could not queue this execution"),
+    onError: () => toast.error("Could not start this execution"),
   });
 
   const regenerate = useMutation({
@@ -65,6 +69,8 @@ function TestDetailPage() {
     onSuccess: (job) => toast.success(`Regeneration queued (${job.jobId})`),
     onError: () => toast.error("Could not queue the regeneration"),
   });
+
+  const running = test?.status === "running";
 
   if (isLoading || !test) {
     return (
@@ -95,7 +101,12 @@ function TestDetailPage() {
             <Button
               variant="outline"
               size="sm"
-              disabled={regenerate.isPending}
+              disabled={regenerate.isPending || test.origin === "discovered"}
+              title={
+                test.origin === "discovered"
+                  ? "This test was written by hand — regenerating would overwrite it."
+                  : undefined
+              }
               onClick={() => regenerate.mutate()}
             >
               Regenerate
@@ -103,10 +114,11 @@ function TestDetailPage() {
             <Button
               variant="primary"
               size="sm"
-              disabled={run.isPending}
+              data-testid="test-run"
+              disabled={run.isPending || running}
               onClick={() => run.mutate()}
             >
-              Run
+              {running ? "Running…" : "Run"}
             </Button>
           </>
         }
@@ -171,6 +183,42 @@ function TestDetailPage() {
           )}
 
           <Panel>
+            <PanelHeader
+              title="Test code"
+              meta={test.line ? `${test.file}:${test.line}` : test.file}
+            />
+            {test.sourceError ? (
+              <PanelBody className="text-sm text-muted-foreground">{test.sourceError}</PanelBody>
+            ) : test.source ? (
+              <div className="max-h-[32rem] overflow-auto">
+                <pre className="px-4 py-3 text-[12px] leading-relaxed">
+                  <code>
+                    {test.source.split("\n").map((text, index) => {
+                      const number = index + 1;
+                      const highlighted = test.line !== null && number === test.line;
+                      return (
+                        <div
+                          key={number}
+                          className={`flex gap-3 ${highlighted ? "bg-primary/10" : ""}`}
+                        >
+                          <span className="w-10 shrink-0 text-right text-dim select-none">
+                            {number}
+                          </span>
+                          <span className="whitespace-pre">{text}</span>
+                        </div>
+                      );
+                    })}
+                  </code>
+                </pre>
+              </div>
+            ) : (
+              <PanelBody className="text-sm text-muted-foreground">
+                No source available for this test.
+              </PanelBody>
+            )}
+          </Panel>
+
+          <Panel>
             <PanelHeader title="Gherkin scenario" meta={scenario?.feature ?? "—"} />
             {scenario ? (
               <GherkinBlock text={formatGherkin(scenario)} />
@@ -183,6 +231,17 @@ function TestDetailPage() {
         </div>
 
         <div className="space-y-5">
+          {running ? (
+            <Panel>
+              <PanelHeader title="Execution in progress" meta="live" />
+              <PanelBody className="flex items-center gap-3 text-sm text-muted-foreground">
+                <span className="h-2 w-2 animate-pulse rounded-full bg-primary" />
+                Playwright is running this test. The result appears here as soon as it
+                finishes.
+              </PanelBody>
+            </Panel>
+          ) : null}
+
           <Panel>
             <PanelHeader title="Test" meta={test.id} />
             <PanelBody className="space-y-3">

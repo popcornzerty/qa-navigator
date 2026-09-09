@@ -526,13 +526,14 @@ def list_tests(
     return serialised
 
 
-@router.get("/tests/{test_id}", response_model=schemas.PlaywrightTestRead)
+@router.get("/tests/{test_id}", response_model=schemas.PlaywrightTestDetailRead)
 def get_test(test_id: str, db: Session = Depends(get_db)):
     test = db.get(models.PlaywrightTest, test_id)
     if not test:
         raise HTTPException(status_code=404, detail="Playwright test not found")
     story = db.get(models.UserStory, test.user_story_id) if test.user_story_id else None
-    return serializers.test(test, story)
+    project = db.get(models.Project, test.project_id)
+    return serializers.test_detail(test, story, project.repository_path if project else None)
 
 
 @router.post(
@@ -545,8 +546,15 @@ def run_test(test_id: str, background_tasks: BackgroundTasks, db: Session = Depe
     test = db.get(models.PlaywrightTest, test_id)
     if not test:
         raise HTTPException(status_code=404, detail="Playwright test not found")
+    if test.test_status == "running":
+        raise HTTPException(status_code=409, detail="Ce test est déjà en cours d'exécution.")
+    # Marked before the task is queued, so a client polling straight after this response
+    # sees `running` rather than the previous verdict and can show the run in flight.
+    test.test_status = "running"
+    test.result = {**(test.result or {}), "status": "running"}
+    db.commit()
     background_tasks.add_task(run_playwright_test, test_id)
-    return schemas.JobRead(job_id=test_id, status="queued", progress=0)
+    return schemas.JobRead(job_id=test_id, status="running", progress=0)
 
 
 @router.post(

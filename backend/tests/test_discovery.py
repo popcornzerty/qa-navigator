@@ -99,9 +99,29 @@ class TestExtraction:
         """
         assert [item.title for item in extract_tests(source, "a.spec.ts")] == ["réel"]
 
-    def test_line_numbers_survive_comment_stripping(self):
-        source = "// en-tête\n\ntest(\"premier\", async () => {});\n"
+    def test_line_numbers_survive_a_line_comment(self):
+        source = '// en-tête\n\ntest("premier", async () => {});\n'
         assert extract_tests(source, "a.spec.ts")[0].line == 3
+
+    def test_line_numbers_survive_a_block_comment(self):
+        """Removing a block comment outright renumbered everything after it.
+
+        These files open with a long explanatory header, so the reported line landed deep
+        inside the next comment instead of on the test it was meant to point at.
+        """
+        source = (
+            'import { test } from "@playwright/test";\n'
+            "/**\n * Une explication\n * sur plusieurs lignes\n */\n"
+            'test("premier", async () => {});\n'
+        )
+        found = extract_tests(source, "a.spec.ts")
+        assert found[0].line == 6
+        assert source.split("\n")[found[0].line - 1].startswith("test(")
+
+    def test_a_test_after_several_block_comments_keeps_its_line(self):
+        source = "/* un */\n/* deux\n   suite */\n\n" + 'test("cible", async () => {});\n'
+        found = extract_tests(source, "a.spec.ts")
+        assert source.split("\n")[found[0].line - 1].startswith("test(")
 
 
 class TestConfigResolution:

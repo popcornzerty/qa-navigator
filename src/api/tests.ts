@@ -1,4 +1,9 @@
-import type { PlaywrightTest, TestOrigin, TestStatus } from "../types/models";
+import type {
+  PlaywrightTest,
+  PlaywrightTestDetail,
+  TestOrigin,
+  TestStatus,
+} from "../types/models";
 import { clone, http, resolve } from "./client";
 import * as db from "./mock/data";
 
@@ -35,14 +40,14 @@ export const testsApi = {
     );
   },
 
-  get(testId: string): Promise<PlaywrightTest> {
+  get(testId: string): Promise<PlaywrightTestDetail> {
     return resolve(
       async () => {
         const test = db.tests.find((t) => t.id === testId);
         if (!test) throw new Error(`Test ${testId} not found`);
-        return clone(test);
+        return { ...clone(test), source: "", line: null, sourceError: null };
       },
-      () => http<PlaywrightTest>(`/tests/${testId}`),
+      () => http<PlaywrightTestDetail>(`/tests/${testId}`),
     );
   },
 

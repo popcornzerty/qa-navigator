@@ -32,7 +32,14 @@ export const Route = createFileRoute("/automation/")({
   component: AutomationPage,
 });
 
-const STATUS_FILTERS: (TestStatus | "all")[] = ["all", "passed", "failed", "skipped", "not_run"];
+const STATUS_FILTERS: (TestStatus | "all")[] = [
+  "all",
+  "running",
+  "passed",
+  "failed",
+  "skipped",
+  "not_run",
+];
 
 /** How a test came to exist. The label matters more than the value: "existing" is the
  *  honest word for a test the repository already had, and it is the one distinction that
@@ -76,11 +83,17 @@ function AutomationPage() {
   const { data: tests = [] } = useQuery({
     queryKey: ["tests", filters],
     queryFn: () => testsApi.list(filters),
+    // Runs happen in a subprocess with no progress stream, so the rows are the only
+    // signal. Poll while any of them is executing, and stop once they all settle.
+    refetchInterval: (query) =>
+      query.state.data?.some((item) => item.status === "running") ? 1000 : false,
   });
 
   const { data: allTests = [] } = useQuery({
     queryKey: ["tests", "all", projectId],
     queryFn: () => testsApi.list(projectId ? { projectId } : {}),
+    refetchInterval: (query) =>
+      query.state.data?.some((item) => item.status === "running") ? 1000 : false,
   });
 
   const stats = useMemo(() => {
@@ -98,11 +111,11 @@ function AutomationPage() {
 
   const run = useMutation({
     mutationFn: (testId: string) => testsApi.run(testId),
-    onSuccess: (job) => {
+    onSuccess: () => {
       invalidate();
-      toast.success(`Execution queued (${job.jobId})`);
+      toast.success("Execution started");
     },
-    onError: () => toast.error("Could not queue this execution"),
+    onError: () => toast.error("Could not start this execution"),
   });
 
   const regenerate = useMutation({
@@ -250,10 +263,10 @@ function AutomationPage() {
                         variant="subtle"
                         size="sm"
                         data-testid="test-run"
-                        disabled={run.isPending}
+                        disabled={run.isPending || test.status === "running"}
                         onClick={() => run.mutate(test.id)}
                       >
-                        Run
+                        {test.status === "running" ? "Running…" : "Run"}
                       </Button>
                       <Button
                         variant="ghost"

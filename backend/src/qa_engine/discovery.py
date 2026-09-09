@@ -85,7 +85,18 @@ class DiscoveredTest:
 
 
 def strip_comments(text: str) -> str:
-    return LINE_COMMENT.sub("", BLOCK_COMMENT.sub("", text))
+    """Blank out comments while keeping every line where it was.
+
+    A block comment is replaced by its own newlines rather than removed: deleting it
+    outright shifts every line after it, and the reported line then points at whatever
+    happens to sit at the old offset — in a file with a long header comment, at the header
+    of the next test rather than the test itself.
+    """
+
+    def blank(match: re.Match[str]) -> str:
+        return "\n" * match.group().count("\n")
+
+    return LINE_COMMENT.sub("", BLOCK_COMMENT.sub(blank, text))
 
 
 def extract_tests(text: str, relative_path: str) -> list[DiscoveredTest]:

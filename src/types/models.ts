@@ -81,7 +81,9 @@ export interface UserStory {
   status: StoryStatus;
 }
 
-export type TestStatus = "passed" | "failed" | "skipped" | "not_run";
+/** `running` is what lets the UI tell a run in flight from a stale result: without it a
+ *  test keeps its previous verdict while executing and nothing on screen moves. */
+export type TestStatus = "passed" | "failed" | "skipped" | "not_run" | "running";
 
 export interface TestResult {
   status: TestStatus;
@@ -113,6 +115,16 @@ export interface PlaywrightTest {
   lastRun: string | null;
   durationMs: number;
   result: TestResult;
+}
+
+/** One test plus the code that defines it. Kept separate from the list response: a suite
+ *  of a hundred imported tests would otherwise ship every spec file on every poll. */
+export interface PlaywrightTestDetail extends PlaywrightTest {
+  source: string;
+  /** Line the test is declared on, for pointing at it inside a large file. */
+  line: number | null;
+  /** Why the code could not be read — a file moved or deleted since the last analysis. */
+  sourceError: string | null;
 }
 
 /* Analysis / async jobs */

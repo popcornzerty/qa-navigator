@@ -8,7 +8,7 @@ from qa_engine.config import settings
 from qa_engine.database import engine
 from qa_engine.migrations import ensure_schema
 from qa_engine.database import SessionLocal
-from qa_engine.services import recover_interrupted_analyses
+from qa_engine.services import recover_interrupted_analyses, recover_interrupted_runs
 
 
 @asynccontextmanager
@@ -19,6 +19,7 @@ async def lifespan(_: FastAPI):
     session = SessionLocal()
     try:
         recover_interrupted_analyses(session)
+        recover_interrupted_runs(session)
     finally:
         session.close()
     yield
