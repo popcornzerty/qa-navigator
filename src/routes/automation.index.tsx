@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -68,9 +73,17 @@ function AutomationPage() {
     return value;
   }, [projectId, status, origin]);
 
-  const { data: tests = [] } = useQuery({
+  const {
+    data: tests = [],
+    isPending,
+    isPlaceholderData,
+  } = useQuery({
     queryKey: ["tests", filters],
     queryFn: () => testsApi.list(filters),
+    // Changing a filter changes the query key, so without this the list empties while the
+    // new results are in flight and the table announces that nothing matches — a claim
+    // that is not yet known to be true. The previous rows stay until the answer arrives.
+    placeholderData: keepPreviousData,
     // Runs happen in a subprocess with no progress stream, so the rows are the only
     // signal. Poll while any of them is executing, and stop once they all settle.
     refetchInterval: (query) =>
@@ -155,7 +168,7 @@ function AutomationPage() {
       <Panel>
         <PanelHeader
           title="Playwright tests"
-          meta={`${tests.length} shown`}
+          meta={isPending || isPlaceholderData ? "loading…" : `${tests.length} shown`}
           actions={
             <div className="flex flex-wrap items-center gap-1.5">
               {ORIGIN_FILTERS.map((item) => (
@@ -195,7 +208,12 @@ function AutomationPage() {
           </p>
         )}
 
-        <div className="overflow-x-auto">
+        <div
+          className={`overflow-x-auto transition-opacity ${
+            isPlaceholderData ? "pointer-events-none opacity-50" : ""
+          }`}
+          aria-busy={isPlaceholderData}
+        >
           <table data-testid="automation-table" className="w-full text-sm">
             <thead>
               <tr className="border-b border-line text-left text-[11px] tracking-wider text-dim uppercase">
@@ -283,7 +301,9 @@ function AutomationPage() {
                 <tr>
                   <td colSpan={8}>
                     <PanelBody className="text-center text-sm text-muted-foreground">
-                      No Playwright test matches this filter.
+                      {/* On the very first load nothing is known yet, so saying that
+                          nothing matches would be an answer the app does not have. */}
+                      {isPending ? "Loading tests…" : "No Playwright test matches this filter."}
                     </PanelBody>
                   </td>
                 </tr>
