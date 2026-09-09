@@ -4,7 +4,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { testsApi } from "../api";
@@ -64,6 +64,7 @@ const chipOff = "bg-panel2 text-muted-foreground ring-line hover:text-foreground
 function AutomationPage() {
   const { projectId } = useCurrentProject();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [status, setStatus] = useState<TestStatus | "all">("all");
   const [origin, setOrigin] = useState<TestOrigin | "all">("all");
 
@@ -108,13 +109,25 @@ function AutomationPage() {
     };
   }, [allTests]);
 
+  const running = allTests.filter((item) => item.status === "running").length;
+
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["tests"] });
 
   const run = useMutation({
     mutationFn: (testId: string) => testsApi.run(testId),
     onSuccess: () => {
       invalidate();
-      toast.success("Execution started");
+      // The console lives on another screen, and the moment someone wants to watch a run
+      // is the moment they start it. Without this the only way there is to know it exists.
+      toast.success("Execution started", {
+        // Long enough to be clicked: this is a shortcut to another screen, not a
+        // notification. A short test finishes before a four-second toast expires.
+        duration: 10_000,
+        action: {
+          label: "Watch",
+          onClick: () => void navigate({ to: "/runs" }),
+        },
+      });
     },
     onError: () => toast.error("Could not start this execution"),
   });
@@ -171,6 +184,14 @@ function AutomationPage() {
           meta={isPending || isPlaceholderData ? "loading…" : `${tests.length} shown`}
           actions={
             <div className="flex flex-wrap items-center gap-1.5">
+              {/* The console lives on Executions. A toast pointing there is a shortcut,
+                  not a path: a short test finishes before the toast is read. */}
+              <Link to="/runs">
+                <Button variant="outline" size="sm" data-testid="watch-executions">
+                  {running > 0 ? `Watch ${running} running` : "Executions"}
+                </Button>
+              </Link>
+              <span aria-hidden className="mx-1 h-4 w-px bg-line" />
               {ORIGIN_FILTERS.map((item) => (
                 <button
                   key={item.value}
