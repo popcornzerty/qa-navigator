@@ -112,6 +112,18 @@ class DiscoveredFeature:
         return any(s.kind == "form" for s in self.symbols)
 
 
+def defines_a_domain(route: str) -> bool:
+    """Whether a route is a domain of its own, or a fragment of the page declaring it.
+
+    A path route earns its own domain: distinct URLs served by a router usually mean
+    distinct areas of the product. A hash route does not. It addresses a fragment of a
+    single page — the four legal pages of one application all live in its entry file —
+    and treating each as a functional domain shatters the product into a domain per
+    anchor. Their file decides instead, like every other symbol.
+    """
+    return not route.startswith("#")
+
+
 def _route_domain(route: str) -> str:
     """First meaningful segment of a route path. ``/`` maps to ``home``."""
     parts = [part for part in route.strip("/").split("/") if part]
@@ -194,14 +206,14 @@ def group_symbols(symbols: list[DiscoveredSymbol]) -> list[DiscoveredFeature]:
     # unrelated paths in one file, so the file cannot dictate a single domain.
     file_domains: dict[str, str] = {}
     for symbol in symbols:
-        if symbol.kind == "route":
+        if symbol.kind == "route" and defines_a_domain(symbol.name):
             file_domains.setdefault(symbol.source_path, _route_domain(symbol.name))
 
     # Grouped by display label so that `home` and `index` do not produce two "Accueil".
     grouped: dict[str, list[DiscoveredSymbol]] = defaultdict(list)
     keys: dict[str, str] = {}
     for symbol in symbols:
-        if symbol.kind == "route":
+        if symbol.kind == "route" and defines_a_domain(symbol.name):
             domain = _route_domain(symbol.name)
         else:
             domain = file_domains.get(symbol.source_path) or _path_domain(symbol.source_path)
@@ -243,7 +255,7 @@ def shared_test_ids(symbols: list[DiscoveredSymbol]) -> list[str]:
     """
     file_domains: dict[str, str] = {}
     for symbol in symbols:
-        if symbol.kind == "route":
+        if symbol.kind == "route" and defines_a_domain(symbol.name):
             file_domains.setdefault(symbol.source_path, _route_domain(symbol.name))
 
     shared: set[str] = set()

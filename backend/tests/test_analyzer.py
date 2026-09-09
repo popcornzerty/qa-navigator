@@ -187,3 +187,48 @@ class TestHashRoutes:
 
     def test_path_routes_are_unaffected(self):
         assert _names('<Route path="/cart" />', "route") == {"/cart"}
+
+
+class TestHashRoutesDoNotFragmentDomains:
+    """Four legal pages addressed by hash are fragments of one screen, not four domains."""
+
+    APP = """
+    const ADRESSES = {
+      "#a-propos": "apropos",
+      "#cgu": "cgu",
+      "#mentions-legales": "mentions",
+      "#confidentialite": "confidentialite",
+    };
+    window.addEventListener("hashchange", suivre);
+    export function App() { return <main>{window.location.hash}</main>; }
+    """
+
+    def _features(self, tmp_path: Path):
+        source = tmp_path / "src" / "screens"
+        source.mkdir(parents=True)
+        (source / "App.tsx").write_text(self.APP, encoding="utf-8")
+        (source / "Portfolio.tsx").write_text(
+            'export function Portfolio() { return <table />; }\n'
+            'const rows = get<Rows>("/portfolio/positions");\n',
+            encoding="utf-8",
+        )
+        _, symbols = extract_repository_metadata(tmp_path)
+        return group_symbols(symbols)
+
+    def test_the_anchors_do_not_each_become_a_domain(self, tmp_path: Path):
+        names = {feature.name for feature in self._features(tmp_path)}
+        assert not any(name.startswith("#") for name in names), names
+
+    def test_the_anchors_are_still_reported_as_routes(self, tmp_path: Path):
+        """They remain real addresses a test can open — just not domains of their own."""
+        routes = {route for feature in self._features(tmp_path) for route in feature.routes}
+        assert "#cgu" in routes and "#mentions-legales" in routes
+
+    def test_a_path_route_still_defines_its_own_domain(self, tmp_path: Path):
+        source = tmp_path / "src" / "routes"
+        source.mkdir(parents=True)
+        (source / "cart.tsx").write_text(
+            'export function Cart() { return <Route path="/cart" />; }', encoding="utf-8"
+        )
+        _, symbols = extract_repository_metadata(tmp_path)
+        assert {feature.name for feature in group_symbols(symbols)} == {"Panier"}
