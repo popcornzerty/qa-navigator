@@ -32,6 +32,7 @@ from qa_engine.models import (
     GherkinScenario,
     PlaywrightTest,
     Project,
+    TestRun,
     UserStory,
 )
 from qa_engine.ollama import OllamaError
@@ -621,16 +622,107 @@ def generate_playwright_for_scenario(scenario_id: str) -> None:
         db.close()
 
 
-def run_playwright_test(test_id: str) -> None:
-    """Execute one generated spec and persist its result."""
-    db = SessionLocal()
+def _abandon_run(db: Session, test_id: str) -> None:
+    """Close a run whose worker crashed, so it does not stay `running` for ever.
+
+    Called from the exception handler, where the session has just been rolled back — a
+    fresh one is used rather than the poisoned one.
+    """
+    session = SessionLocal()
     try:
-        test = db.get(PlaywrightTest, test_id)
+        for run in session.scalars(
+            select(TestRun).where(TestRun.test_id == test_id, TestRun.run_status == "running")
+        ):
+            run.run_status = "not_run"
+            run.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            run.error_message = "L'exécution s'est interrompue sur une erreur du moteur."
+        test = session.get(PlaywrightTest, test_id)
+        if test and test.test_status == "running":
+            test.test_status = "not_run"
+        session.commit()
+    except Exception:
+        session.rollback()
+        logger.exception("Could not close the abandoned run of %s", test_id)
+    finally:
+        session.close()
+
+
+class _LogWriter:
+    """Collects Playwright's output and persists it while the run is still going.
+
+    Committing every line would mean one write per line for no benefit — nothing reads
+    faster than the UI polls. Committing only at the end would defeat the purpose: the
+    log exists so a run can be watched, not so it can be read afterwards. Flushing on a
+    short interval gives both.
+    """
+
+    FLUSH_SECONDS = 0.4
+
+    def __init__(self, db: Session, run: "TestRun") -> None:
+        self._db = db
+        self._run = run
+        self._lines: list[str] = []
+        self._flushed = 0
+        self._last = 0.0
+
+    def __call__(self, line: str) -> None:
+        self._lines.append(line)
+        if time.monotonic() - self._last >= self.FLUSH_SECONDS:
+            self.flush()
+
+    def flush(self) -> None:
+        if self._flushed == len(self._lines):
+            return
+        self._run.log = self.text
+        self._db.commit()
+        self._flushed = len(self._lines)
+        self._last = time.monotonic()
+
+    @property
+    def text(self) -> str:
+        return "\n".join(self._lines)
+
+
+def queue_run(db: Session, test: PlaywrightTest) -> TestRun:
+    """Open a run before the worker starts.
+
+    The row is created here, not in the worker, so the response to "run this test" can
+    name the run the caller should watch. Created in the worker, it would not exist yet
+    when the client asks for it.
+    """
+    run = TestRun(
+        test_id=test.id,
+        project_id=test.project_id,
+        scenario=test.scenario,
+        file=test.file,
+        origin=test.origin,
+        run_status="running",
+    )
+    db.add(run)
+    test.test_status = "running"
+    test.result = {**(test.result or {}), "status": "running"}
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+def run_playwright_test(run_id: str) -> None:
+    """Execute the test behind one run, streaming its output into it."""
+    db = SessionLocal()
+    test_id = ""
+    try:
+        run = db.get(TestRun, run_id)
+        if not run:
+            return
+        test_id = run.test_id
+        test = db.get(PlaywrightTest, run.test_id)
         if not test:
             return
         project = db.get(Project, test.project_id)
         if not project:
             return
+
+        writer = _LogWriter(db, run)
 
         # A generated spec reads PLAYWRIGHT_BASE_URL, so the engine supplies it. A
         # discovered one obeys its own repository's config, and overriding its base URL
@@ -648,10 +740,17 @@ def run_playwright_test(test_id: str) -> None:
                 working_directory=test.working_directory or "",
                 playwright_project=test.playwright_project,
                 grep=execution.grep_for(test.selector) if test.selector else None,
+                on_output=writer,
             )
         except execution.ExecutionError as exc:
-            # The runner never started: that is a failure of the run, not of the test.
+            # The runner never started: that is a failure of the run, not of the test, so
+            # the test keeps whatever verdict it already had.
             logger.warning("Execution of %s could not start: %s", test_id, exc)
+            writer.flush()
+            run.run_status = "not_run"
+            run.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            run.error_message = str(exc)
+            test.test_status = "not_run" if test.test_status == "running" else test.test_status
             test.result = {
                 "status": test.test_status,
                 "executed_at": None,
@@ -665,6 +764,22 @@ def run_playwright_test(test_id: str) -> None:
         # Naive UTC, matching the other timestamp columns. Mixing an aware ISO string
         # in `result` with a naive column made the same run show two different times.
         executed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+
+        writer.flush()
+        run.run_status = outcome.status
+        run.finished_at = executed_at
+        run.duration_ms = outcome.duration_ms
+        run.error_message = outcome.error_message
+        run.screenshot = outcome.screenshot
+        run.trace = outcome.trace
+        run.log = writer.text
+        run.total, run.passed, run.failed, run.skipped = (
+            outcome.total,
+            outcome.passed,
+            outcome.failed,
+            outcome.skipped,
+        )
+
         test.test_status = outcome.status
         test.last_run = executed_at
         test.duration_ms = outcome.duration_ms
@@ -691,6 +806,7 @@ def run_playwright_test(test_id: str) -> None:
     except Exception:
         db.rollback()
         logger.exception("Execution crashed for %s", test_id)
+        _abandon_run(db, test_id)
     finally:
         db.close()
 
@@ -894,15 +1010,20 @@ def recover_interrupted_runs(db: Session) -> int:
     The previous verdict is not restored — it is no longer known to hold — so the test
     goes back to `not_run` and says why.
     """
+    message = "Exécution interrompue par un arrêt du moteur. Relancez le test."
+
+    # The history first: a run left `running` would otherwise be watched for ever by a UI
+    # polling a subprocess that died with the previous process.
+    for run in db.scalars(select(TestRun).where(TestRun.run_status == "running")):
+        run.run_status = "not_run"
+        run.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        run.error_message = message
+
     stranded = list(db.scalars(select(PlaywrightTest).where(PlaywrightTest.test_status == "running")))
     for test in stranded:
         test.test_status = "not_run"
-        test.result = {
-            **(test.result or {}),
-            "status": "not_run",
-            "error_message": "Exécution interrompue par un arrêt du moteur. Relancez le test.",
-        }
+        test.result = {**(test.result or {}), "status": "not_run", "error_message": message}
+    db.commit()
     if stranded:
-        db.commit()
         logger.warning("Released %d test run(s) interrupted by a restart", len(stranded))
     return len(stranded)

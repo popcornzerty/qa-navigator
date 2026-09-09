@@ -15,6 +15,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -23,6 +25,8 @@ from qa_engine.discovery import TITLE_SEPARATOR
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_SECONDS = 600
+
+NEWLINE = "\n"
 
 # Playwright statuses that are failures for QA purposes.
 FAILED_STATUSES = {"failed", "timedOut", "interrupted"}
@@ -201,6 +205,60 @@ def grep_for(title: str) -> str:
     return f" {escaped}$"
 
 
+def _stream(
+    command: list[str],
+    cwd: Path,
+    environment: dict[str, str],
+    timeout_seconds: int,
+    on_output: Callable[[str], None] | None,
+) -> list[str]:
+    """Run the command, forwarding each line as it arrives. Returns everything printed.
+
+    stderr is merged into stdout so the two stay in the order they were written: read
+    separately, a warning and the test it concerns end up in different places.
+    """
+    printed: list[str] = []
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=str(cwd),
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+    except OSError as exc:
+        raise ExecutionError(f"Impossible de lancer Playwright : {exc}") from exc
+
+    deadline = time.monotonic() + timeout_seconds
+    try:
+        assert process.stdout is not None
+        for line in process.stdout:
+            text = strip_ansi(line.rstrip()) or ""
+            printed.append(text)
+            if on_output is not None:
+                try:
+                    on_output(text)
+                except Exception:  # a failing observer must not abort the run
+                    logger.exception("Output observer failed")
+            if time.monotonic() > deadline:
+                raise TimeoutError
+        process.wait(timeout=max(1, int(deadline - time.monotonic())))
+    except (TimeoutError, subprocess.TimeoutExpired) as exc:
+        process.kill()
+        process.wait()
+        raise ExecutionError(
+            f"L'exécution a dépassé {timeout_seconds}s et a été interrompue."
+        ) from exc
+    finally:
+        if process.stdout is not None:
+            process.stdout.close()
+    return printed
+
+
 def run_spec(
     repository_path: str,
     spec_file: str,
@@ -209,6 +267,7 @@ def run_spec(
     working_directory: str = "",
     playwright_project: str | None = None,
     grep: str | None = None,
+    on_output: Callable[[str], None] | None = None,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
 ) -> ExecutionOutcome:
     """Run one spec file — or one test inside it — and return its outcome.
@@ -219,6 +278,12 @@ def run_spec(
     `working_directory` is where Playwright is invoked from, since its config, `testDir`,
     `webServer` and `baseURL` are all resolved relative to that directory. In a monorepo
     the config sits beside the application it tests, not at the repository root.
+
+    `on_output` receives each line as Playwright prints it. The JSON reporter only writes
+    once everything has finished, so a caller holding only the report has nothing to show
+    for however long the run takes — which for a suite starting its own dev server is
+    minutes. The `list` reporter is added alongside it purely to have something to
+    forward; the JSON file remains the sole source of the verdict.
     """
     root = Path(repository_path)
     if not (root / spec_file).is_file():
@@ -245,7 +310,7 @@ def run_spec(
     with tempfile.TemporaryDirectory() as workspace:
         report_path = Path(workspace) / "report.json"
         environment["PLAYWRIGHT_JSON_OUTPUT_NAME"] = str(report_path)
-        command = [npx, "playwright", "test", target, "--reporter=json"]
+        command = [npx, "playwright", "test", target, "--reporter=list,json"]
         if playwright_project:
             # Without this, a suite needing a live backend and a session can be dragged
             # into a run that required neither, and report red for nothing.
@@ -254,33 +319,21 @@ def run_spec(
             command += ["--grep", grep]
 
         logger.info("Running %s in %s", target, cwd)
-        try:
-            completed = subprocess.run(
-                command,
-                cwd=str(cwd),
-                env=environment,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout_seconds,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise ExecutionError(
-                f"L'exécution a dépassé {timeout_seconds}s et a été interrompue."
-            ) from exc
-        except OSError as exc:
-            raise ExecutionError(f"Impossible de lancer Playwright : {exc}") from exc
+        printed = _stream(command, cwd, environment, timeout_seconds, on_output)
 
-        raw = report_path.read_text(encoding="utf-8") if report_path.is_file() else completed.stdout
+        if not report_path.is_file():
+            raise ExecutionError(
+                "Playwright n'a produit aucun rapport JSON. Sortie : "
+                + NEWLINE.join(printed[-12:])[-600:]
+            )
+        raw = report_path.read_text(encoding="utf-8")
 
     try:
         report = json.loads(raw)
     except (ValueError, TypeError) as exc:
-        detail = (completed.stderr or completed.stdout or "")[-600:]
         raise ExecutionError(
-            f"Playwright n'a pas produit de rapport JSON exploitable. Sortie : {detail}"
+            "Playwright n'a pas produit de rapport JSON exploitable. Sortie : "
+            + NEWLINE.join(printed[-12:])[-600:]
         ) from exc
 
     return parse_report(report, root)

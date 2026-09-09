@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { formatGherkin, storiesApi, testsApi } from "../api";
+import { formatGherkin, runsApi, storiesApi, testsApi } from "../api";
 import { PageHeader } from "../components/layout/app-shell";
 import { Button } from "../components/ui/button";
 import { GherkinBlock } from "../components/ui/gherkin-block";
@@ -11,6 +11,7 @@ import {
   ORIGIN_PROVES,
   OriginBadge,
 } from "../components/qa/origin-badge";
+import { RunConsole } from "../components/qa/run-console";
 import { Panel, PanelBody, PanelHeader } from "../components/ui/panel";
 import { StatusBadge } from "../components/ui/status-badge";
 import { formatDateTime, formatDuration, label } from "../lib/format";
@@ -61,10 +62,20 @@ function TestDetailPage() {
     enabled: Boolean(test?.userStoryId),
   });
 
+  // The executions of this test, so a flaky one is visible as flaky rather than as
+  // whatever it happened to do last.
+  const { data: history = [] } = useQuery({
+    queryKey: ["runs", "test", testId],
+    queryFn: () => runsApi.list({ testId, limit: 20 }),
+    refetchInterval: (query) =>
+      query.state.data?.some((item) => item.status === "running") ? 1000 : false,
+  });
+
   const run = useMutation({
     mutationFn: () => testsApi.run(testId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["test", testId] });
+      queryClient.invalidateQueries({ queryKey: ["runs"] });
       toast.success("Execution started");
     },
     onError: () => toast.error("Could not start this execution"),
@@ -188,6 +199,8 @@ function TestDetailPage() {
             </Panel>
           )}
 
+          {history[0] ? <RunConsole runId={history[0].id} showLink={false} /> : null}
+
           <Panel>
             <PanelHeader
               title="Test code"
@@ -237,17 +250,6 @@ function TestDetailPage() {
         </div>
 
         <div className="space-y-5">
-          {running ? (
-            <Panel>
-              <PanelHeader title="Execution in progress" meta="live" />
-              <PanelBody className="flex items-center gap-3 text-sm text-muted-foreground">
-                <span className="h-2 w-2 animate-pulse rounded-full bg-primary" />
-                Playwright is running this test. The result appears here as soon as it
-                finishes.
-              </PanelBody>
-            </Panel>
-          ) : null}
-
           <Panel>
             <PanelHeader title="Origin" meta={ORIGIN_LABELS[test.origin]} />
             <PanelBody className="space-y-3">
@@ -275,6 +277,31 @@ function TestDetailPage() {
               <Row label="Last execution" value={formatDateTime(test.lastRun)} />
               <Row label="Jira" value={test.userStoryKey} mono />
             </PanelBody>
+          </Panel>
+
+          <Panel>
+            <PanelHeader title="Executions" meta={`${history.length} kept`} />
+            {history.length === 0 ? (
+              <PanelBody className="text-sm text-muted-foreground">
+                This test has not been run yet.
+              </PanelBody>
+            ) : (
+              <ul data-testid="run-history" className="divide-y divide-line">
+                {history.map((item) => (
+                  <li key={item.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                    <span className="text-xs text-muted-foreground">
+                      {formatDateTime(item.startedAt)}
+                    </span>
+                    <span className="flex items-center gap-2">
+                      <span className="font-mono text-[11px] text-muted-foreground">
+                        {formatDuration(item.durationMs)}
+                      </span>
+                      <StatusBadge status={item.status} />
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </Panel>
 
           <Panel>

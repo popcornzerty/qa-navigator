@@ -122,6 +122,41 @@ def _read_source(
         return "", f"Lecture impossible : {exc}"
 
 
+
+def run(row: models.TestRun) -> schemas.TestRunRead:
+    return schemas.TestRunRead(
+        id=row.id,
+        test_id=row.test_id,
+        project_id=row.project_id,
+        scenario=row.scenario,
+        file=row.file,
+        origin=("discovered" if row.origin == "discovered" else "code"),
+        status=row.run_status,
+        started_at=row.started_at,
+        finished_at=row.finished_at,
+        duration_ms=row.duration_ms,
+        error_message=row.error_message,
+        screenshot=row.screenshot,
+        trace=row.trace,
+        total=row.total,
+        passed=row.passed,
+        failed=row.failed,
+        skipped=row.skipped,
+    )
+
+
+def run_detail(row: models.TestRun, since: int = 0) -> schemas.TestRunDetailRead:
+    """One run, with the output produced after line `since`."""
+    lines = (row.log or "").splitlines()
+    start = max(0, min(since, len(lines)))
+    return schemas.TestRunDetailRead(
+        **run(row).model_dump(),
+        log="\n".join(lines[start:]),
+        offset=start,
+        line_count=len(lines),
+    )
+
+
 def feature(row: models.Feature) -> schemas.FeatureRead:
     return schemas.FeatureRead(
         id=row.id,

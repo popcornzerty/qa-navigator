@@ -127,6 +127,41 @@ export interface PlaywrightTestDetail extends PlaywrightTest {
   sourceError: string | null;
 }
 
+/** One execution of one test, kept after the next one replaces it.
+ *
+ *  `PlaywrightTest` carries only the latest verdict, which made a flaky test
+ *  indistinguishable from a stable one and left no way to say when a test started
+ *  failing. This is the history behind it. */
+export interface TestRun {
+  id: string;
+  testId: string;
+  projectId: string;
+  scenario: string;
+  file: string;
+  origin: TestOrigin;
+  status: TestStatus;
+  startedAt: string;
+  finishedAt: string | null;
+  durationMs: number;
+  errorMessage: string | null;
+  screenshot: string | null;
+  trace: string | null;
+  total: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+}
+
+/** One execution with its output, served from an offset so a client watching a run in
+ *  progress asks only for what it has not seen. */
+export interface TestRunDetail extends TestRun {
+  log: string;
+  /** Number of lines before the first one in `log`. */
+  offset: number;
+  /** Total lines produced so far; echo it back as `since` to continue. */
+  lineCount: number;
+}
+
 /* Analysis / async jobs */
 
 export type StepStatus = "pending" | "running" | "completed" | "failed";

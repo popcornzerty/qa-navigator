@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, JSON, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -156,3 +156,49 @@ class PlaywrightTest(Base):
     last_run: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
     result: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class TestRun(Base):
+    """One execution of one test, kept after the next one replaces it.
+
+    `PlaywrightTest` carries the latest verdict so a list can be rendered without a join;
+    this table is the history behind it. Keeping only the last result made a flaky test
+    indistinguishable from a stable one, and left no way to say when a test started
+    failing — the two questions a QA engineer asks first.
+    """
+
+    __tablename__ = "test_runs"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True, default=new_id)
+    test_id: Mapped[str] = mapped_column(ForeignKey("playwright_tests.id"), index=True)
+    # Denormalised so the executions screen can filter by project without a join.
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
+    scenario: Mapped[str] = mapped_column(String(500), default="")
+    file: Mapped[str] = mapped_column(Text, default="")
+    origin: Mapped[str] = mapped_column(String(20), default="generated")
+
+    run_status: Mapped[str] = mapped_column(String(20), default="running", index=True)
+    # Written in Python rather than by the database: SQLite's own `now()` has a resolution
+    # of one second, so two runs started in the same second sort arbitrarily and the
+    # history stops being a history. Naive UTC, matching every other timestamp here.
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None), index=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    screenshot: Mapped[str | None] = mapped_column(Text, nullable=True)
+    trace: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Playwright's own output, appended as it is produced rather than at the end, so the
+    # UI can show a run in progress instead of a spinner. This is what makes the run
+    # observable while it is still happening.
+    log: Mapped[str] = mapped_column(Text, default="")
+
+    # Per-test tally within the run. A file holds one test when generated and dozens when
+    # imported, so a single verdict hides how much of it actually passed.
+    total: Mapped[int] = mapped_column(Integer, default=0)
+    passed: Mapped[int] = mapped_column(Integer, default=0)
+    failed: Mapped[int] = mapped_column(Integer, default=0)
+    skipped: Mapped[int] = mapped_column(Integer, default=0)

@@ -279,6 +279,43 @@ class PlaywrightTestDetailRead(PlaywrightTestRead):
     source_error: str | None = None
 
 
+class TestRunRead(Wire):
+    """One execution in the history."""
+
+    id: str
+    test_id: str
+    project_id: str
+    scenario: str
+    file: str
+    origin: TestOrigin
+    status: TestStatus
+    started_at: datetime
+    finished_at: datetime | None
+    duration_ms: int
+    error_message: str | None
+    screenshot: str | None
+    trace: str | None
+    total: int
+    passed: int
+    failed: int
+    skipped: int
+
+
+class TestRunDetailRead(TestRunRead):
+    """One execution with its output.
+
+    The log is served from an offset so a client watching a run in progress asks only for
+    what it has not seen. Sending the whole thing on every poll would resend the same
+    kilobytes several times a second for the length of the run.
+    """
+
+    log: str = ""
+    # Number of lines before the first one in `log`; echo it back as `since` to continue.
+    offset: int = 0
+    # Total lines produced so far, so a client can tell it is behind.
+    line_count: int = 0
+
+
 class JobRead(Wire):
     job_id: str
     status: str

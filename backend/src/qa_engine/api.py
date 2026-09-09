@@ -23,6 +23,7 @@ from qa_engine.services import (
     default_jira_jql,
     generate_playwright_for_scenario,
     import_jira_stories,
+    queue_run,
     regenerate_gherkin_for_story,
     run_analysis,
     run_playwright_test,
@@ -548,13 +549,11 @@ def run_test(test_id: str, background_tasks: BackgroundTasks, db: Session = Depe
         raise HTTPException(status_code=404, detail="Playwright test not found")
     if test.test_status == "running":
         raise HTTPException(status_code=409, detail="Ce test est déjà en cours d'exécution.")
-    # Marked before the task is queued, so a client polling straight after this response
-    # sees `running` rather than the previous verdict and can show the run in flight.
-    test.test_status = "running"
-    test.result = {**(test.result or {}), "status": "running"}
-    db.commit()
-    background_tasks.add_task(run_playwright_test, test_id)
-    return schemas.JobRead(job_id=test_id, status="running", progress=0)
+    # Opened before the task is queued, so this response can name the run to watch and a
+    # client polling straight after sees `running` rather than the previous verdict.
+    run = queue_run(db, test)
+    background_tasks.add_task(run_playwright_test, run.id)
+    return schemas.JobRead(job_id=run.id, status="running", progress=0)
 
 
 @router.post(
@@ -581,6 +580,42 @@ def regenerate_test(
         )
     background_tasks.add_task(generate_playwright_for_scenario, test.gherkin_scenario_id)
     return schemas.JobRead(job_id=test.gherkin_scenario_id, status="queued", progress=0)
+
+
+# --- runs ----------------------------------------------------------------------------
+
+
+@router.get("/runs", response_model=list[schemas.TestRunRead])
+def list_runs(
+    project_id: str | None = None,
+    test_id: str | None = None,
+    run_status: str | None = Query(default=None, alias="status"),
+    limit: int = Query(default=50, ge=1, le=500),
+    db: Session = Depends(get_db),
+):
+    """Recent executions, newest first — the history behind each test's latest verdict."""
+    statement = select(models.TestRun)
+    if project_id:
+        statement = statement.where(models.TestRun.project_id == project_id)
+    if test_id:
+        statement = statement.where(models.TestRun.test_id == test_id)
+    if run_status and run_status != "all":
+        statement = statement.where(models.TestRun.run_status == run_status)
+    rows = db.scalars(statement.order_by(models.TestRun.started_at.desc()).limit(limit))
+    return [serializers.run(row) for row in rows]
+
+
+@router.get("/runs/{run_id}", response_model=schemas.TestRunDetailRead)
+def get_run(run_id: str, since: int = Query(default=0, ge=0), db: Session = Depends(get_db)):
+    """One execution, with the output produced after line `since`.
+
+    A client watching a run in progress passes back the `lineCount` it already holds, so
+    each poll carries only what is new rather than the whole log again.
+    """
+    row = db.get(models.TestRun, run_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Test run not found")
+    return serializers.run_detail(row, since)
 
 
 # --- coverage & dashboard ------------------------------------------------------------

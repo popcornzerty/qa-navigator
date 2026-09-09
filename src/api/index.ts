@@ -5,5 +5,6 @@ export { dashboardApi } from "./dashboard";
 export { formatGherkin, gherkinApi, parseGherkin } from "./gherkin";
 export { jiraApi } from "./jira";
 export { projectsApi } from "./projects";
+export { runsApi } from "./runs";
 export { storiesApi } from "./stories";
 export { testsApi } from "./tests";

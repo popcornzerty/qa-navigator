@@ -258,3 +258,122 @@ def test_recovery_leaves_finished_analyses_alone(tmp_path: Path):
         assert db.get(Analysis, analysis_id).status == "completed"
     finally:
         db.close()
+
+
+def test_a_run_is_kept_after_the_next_one_replaces_it(tmp_path: Path):
+    """Only the latest verdict was stored, so a flaky test looked like whatever it did last."""
+    from qa_engine.database import SessionLocal
+    from qa_engine.models import PlaywrightTest, TestRun
+    from qa_engine.services import queue_run
+
+    repo = _repository(tmp_path, "history-runs")
+    with TestClient(app) as client:
+        project_id = _create_project(client, repo, "History runs")
+
+        db = SessionLocal()
+        try:
+            test = PlaywrightTest(
+                id="pw-hist",
+                project_id=project_id,
+                file="tests/a.spec.ts",
+                scenario="un test",
+                origin="discovered",
+            )
+            db.add(test)
+            db.commit()
+            first = queue_run(db, test)
+            first.run_status, first.duration_ms = "failed", 120
+            db.commit()
+            test.test_status = "not_run"
+            db.commit()
+            second = queue_run(db, test)
+            second.run_status, second.duration_ms = "passed", 90
+            db.commit()
+            ids = [first.id, second.id]
+        finally:
+            db.close()
+
+        runs = client.get(f"{PREFIX}/runs?test_id=pw-hist").json()
+        assert {item["id"] for item in runs} == set(ids)
+        # Newest first, so the list reads as a history.
+        assert runs[0]["id"] == ids[1]
+        assert {item["status"] for item in runs} == {"failed", "passed"}
+
+        failed_only = client.get(f"{PREFIX}/runs?test_id=pw-hist&status=failed").json()
+        assert [item["id"] for item in failed_only] == [ids[0]]
+
+
+def test_a_run_log_is_served_from_an_offset(tmp_path: Path):
+    """A client watching a run asks only for what it has not seen."""
+    from qa_engine.database import SessionLocal
+    from qa_engine.models import PlaywrightTest, TestRun
+
+    repo = _repository(tmp_path, "run-log")
+    with TestClient(app) as client:
+        project_id = _create_project(client, repo, "Run log")
+
+        db = SessionLocal()
+        try:
+            test = PlaywrightTest(
+                id="pw-log", project_id=project_id, file="tests/a.spec.ts", scenario="un test"
+            )
+            db.add(test)
+            run = TestRun(
+                test_id="pw-log",
+                project_id=project_id,
+                run_status="running",
+                log="ligne 1\nligne 2\nligne 3",
+            )
+            db.add(run)
+            db.commit()
+            run_id = run.id
+        finally:
+            db.close()
+
+        whole = client.get(f"{PREFIX}/runs/{run_id}").json()
+        assert whole["log"].splitlines() == ["ligne 1", "ligne 2", "ligne 3"]
+        assert whole["lineCount"] == 3
+
+        rest = client.get(f"{PREFIX}/runs/{run_id}?since=2").json()
+        assert rest["log"].splitlines() == ["ligne 3"]
+        assert rest["offset"] == 2
+        assert rest["lineCount"] == 3
+
+        # Asking from the end returns nothing new rather than repeating the log.
+        assert client.get(f"{PREFIX}/runs/{run_id}?since=3").json()["log"] == ""
+
+
+def test_a_run_interrupted_by_a_restart_is_released(tmp_path: Path):
+    """Otherwise the UI polls a subprocess that died with the previous process."""
+    from qa_engine.database import SessionLocal
+    from qa_engine.models import PlaywrightTest, TestRun
+    from qa_engine.services import recover_interrupted_runs
+
+    repo = _repository(tmp_path, "run-recovery")
+    with TestClient(app) as client:
+        project_id = _create_project(client, repo, "Run recovery")
+
+    db = SessionLocal()
+    try:
+        test = PlaywrightTest(
+            id="pw-stuck",
+            project_id=project_id,
+            file="tests/a.spec.ts",
+            scenario="un test",
+            test_status="running",
+        )
+        db.add(test)
+        run = TestRun(test_id="pw-stuck", project_id=project_id, run_status="running")
+        db.add(run)
+        db.commit()
+        run_id = run.id
+
+        assert recover_interrupted_runs(db) == 1
+
+        db.expire_all()
+        assert db.get(TestRun, run_id).run_status == "not_run"
+        assert db.get(TestRun, run_id).finished_at is not None
+        assert "interrompue" in db.get(TestRun, run_id).error_message.lower()
+        assert db.get(PlaywrightTest, "pw-stuck").test_status == "not_run"
+    finally:
+        db.close()

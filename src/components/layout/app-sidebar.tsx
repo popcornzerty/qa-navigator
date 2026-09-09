@@ -12,6 +12,7 @@ const NAV = [
   { to: "/backlog", label: "Backlog", testId: "nav-backlog" },
   { to: "/gherkin", label: "Gherkin", testId: "nav-gherkin" },
   { to: "/automation", label: "Automation", testId: "nav-automation" },
+  { to: "/runs", label: "Executions", testId: "nav-runs" },
   { to: "/coverage", label: "Coverage", testId: "nav-coverage" },
   { to: "/settings", label: "Settings", testId: "nav-settings" },
 ] as const;
