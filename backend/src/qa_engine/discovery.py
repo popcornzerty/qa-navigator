@@ -21,9 +21,12 @@ would mean running untrusted code from a cloned repository inside the engine.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+
+from qa_engine.repositories import EXCLUDED_DIRS
 
 logger = logging.getLogger(__name__)
 
@@ -85,18 +88,59 @@ class DiscoveredTest:
 
 
 def strip_comments(text: str) -> str:
-    """Blank out comments while keeping every line where it was.
+    """Blank out comments, keeping every character where it was.
 
-    A block comment is replaced by its own newlines rather than removed: deleting it
-    outright shifts every line after it, and the reported line then points at whatever
-    happens to sit at the old offset — in a file with a long header comment, at the header
-    of the next test rather than the test itself.
+    Scanned rather than matched with a regular expression, because `//` is only a comment
+    outside a string: `baseURL: "http://localhost:5180"` was being cut at `"http:`, and a
+    test whose title mentions a URL lost half its name. A brace hidden past such a false
+    comment also shifted the describe nesting.
+
+    Comments become spaces and newlines are kept, so every line and column still holds:
+    the line recorded for a test has to point at the test.
     """
+    out: list[str] = []
+    index = 0
+    length = len(text)
+    quote: str | None = None  # the string delimiter currently open, if any
 
-    def blank(match: re.Match[str]) -> str:
-        return "\n" * match.group().count("\n")
+    while index < length:
+        char = text[index]
 
-    return LINE_COMMENT.sub("", BLOCK_COMMENT.sub(blank, text))
+        if quote is not None:
+            out.append(char)
+            if char == "\\" and index + 1 < length:
+                # An escaped character cannot close the string, whatever it is.
+                out.append(text[index + 1])
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+
+        if char in "'\"`":
+            quote = char
+            out.append(char)
+            index += 1
+            continue
+
+        if text.startswith("//", index):
+            while index < length and text[index] != "\n":
+                out.append(" ")
+                index += 1
+            continue
+
+        if text.startswith("/*", index):
+            end = text.find("*/", index + 2)
+            end = length if end == -1 else end + 2
+            out.append("".join("\n" if c == "\n" else " " for c in text[index:end]))
+            index = end
+            continue
+
+        out.append(char)
+        index += 1
+
+    return "".join(out)
 
 
 def extract_tests(text: str, relative_path: str) -> list[DiscoveredTest]:
@@ -241,3 +285,68 @@ def relative_to_config(config_dir: Path, spec_absolute: Path) -> str:
         return spec_absolute.resolve().relative_to(config_dir.resolve()).as_posix()
     except ValueError:
         return PurePosixPath(spec_absolute.as_posix()).name
+
+def find_repository_config(repository_root: Path) -> Path | None:
+    """The Playwright config a generated spec should be written under.
+
+    A generated spec has no config of its own to be found from, so one has to be chosen
+    for it — and choosing badly writes the file somewhere it cannot run. In a monorepo the
+    installation lives beside the application (`frontend/`), not at the repository root:
+    a spec written to the root is executed by an `npx`-downloaded Playwright that cannot
+    resolve `@playwright/test`, and the run dies on the import line.
+
+    Preference therefore goes to a config whose directory actually holds an installation,
+    then to the shallowest one, so a repository with several picks its primary suite.
+    """
+    candidates: list[Path] = []
+    for current_root, dirs, files in os.walk(repository_root):
+        current = Path(current_root)
+        dirs[:] = [item for item in dirs if item not in EXCLUDED_DIRS]
+        candidates.extend(current / name for name in files if name in CONFIG_NAMES)
+
+    if not candidates:
+        return None
+
+    def rank(config: Path) -> tuple[int, int]:
+        installed = 0 if (config.parent / "node_modules").is_dir() else 1
+        return (installed, len(config.parent.relative_to(repository_root).parts))
+
+    return sorted(candidates, key=rank)[0]
+
+
+BASE_URL = re.compile(r"""\bbaseURL\s*:\s*(['"`])(?P<value>[^'"`]+)\1""")
+
+
+def base_url_of(config_text: str) -> str | None:
+    """The `baseURL` a repository's config declares, if any.
+
+    A generated spec navigates to absolute URLs, so it has to agree with the application
+    the repository's own suite targets — pointing it at a default port would exercise
+    nothing, or worse, something else.
+    """
+    found = BASE_URL.search(strip_comments(config_text))
+    return found.group("value") if found else None
+
+def collected_dir_of(config_text: str) -> str | None:
+    """A directory the config actually collects tests from.
+
+    Playwright only runs what its `testDir` covers. A spec written outside it is reported
+    as "No tests found" however correct the file is, so a generated spec has to land
+    somewhere the repository's own config already looks. The top-level `testDir` is
+    preferred; failing that, the first one a project declares.
+    """
+    cleaned = strip_comments(config_text)
+    blocks = _project_blocks(cleaned)
+    project_span = "".join(blocks)
+
+    for match in PROJECT_TESTDIR.finditer(cleaned):
+        # A `testDir` inside the projects array belongs to a project, not to the config.
+        if match.group("value") not in project_span or not blocks:
+            return match.group("value")
+
+    for block in blocks:
+        found = PROJECT_TESTDIR.search(block)
+        if found:
+            return found.group("value")
+    return None
+

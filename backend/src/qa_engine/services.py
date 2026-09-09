@@ -533,16 +533,88 @@ def run_analysis(analysis_id: str) -> None:
         db.close()
 
 
+DEFAULT_BASE_URL = "http://localhost:8080"
+
+
+def playwright_setting(project: Project, name: str, fallback: str) -> str:
+    """Read one Playwright project setting.
+
+    Settings are persisted under their field names while the API speaks camelCase, so a
+    stored `test_directory` was never found by a lookup for `testDirectory` — changing it
+    on the Settings screen quietly did nothing. Both spellings are accepted so existing
+    rows keep working.
+    """
+    stored = project.playwright_config or {}
+    camel = name.split("_")[0] + "".join(part.title() for part in name.split("_")[1:])
+    return stored.get(name) or stored.get(camel) or fallback
+
+
+def _base_url_for(project: Project) -> str:
+    """The address a generated spec should navigate to.
+
+    A value someone actually chose wins. The stored default is not such a choice, so the
+    repository's own Playwright config is preferred over it: that config names the
+    application its suite targets, and a spec sent to a default port would exercise
+    nothing — or, worse, something else that happens to be listening.
+    """
+    configured = playwright_setting(project, "base_url", "")
+    if configured and configured != DEFAULT_BASE_URL:
+        return configured
+
+    config = discovery.find_repository_config(Path(project.repository_path))
+    if config is not None:
+        try:
+            declared = discovery.base_url_of(config.read_text(encoding="utf-8"))
+        except OSError:
+            declared = None
+        if declared:
+            return declared
+    return configured or DEFAULT_BASE_URL
+
+
+def playwright_root(project: Project) -> Path:
+    """The directory a generated spec must live under to be runnable.
+
+    A spec written at the repository root of a monorepo cannot run: the installation and
+    the config sit beside the application, and Playwright invoked from the root resolves
+    `@playwright/test` from an npx download instead, dying on the import line. The
+    repository's own config decides, and the root is only the fallback for a repository
+    that has none.
+    """
+    root = Path(project.repository_path)
+    config = discovery.find_repository_config(root)
+    return config.parent if config else root
+
+
+GENERATED_SUBDIR = "generated"
+
+
 def spec_directory(project: Project) -> Path:
     """Where generated specs are written: inside the analysed repository.
 
-    The specs live next to the code they exercise so the project's own
-    ``playwright.config.ts`` picks them up and a run behaves exactly like CI. This does
-    write into the user's git tree — generated files carry a header saying so, and
+    Playwright only runs what its `testDir` covers, so a spec placed anywhere else is
+    reported as "No tests found" however correct the file is. The repository's own config
+    therefore decides the directory, and the specs go in a `generated/` subfolder of it —
+    collected like any other test, and still plainly separate from the suite a person
+    wrote. Only a repository with no config at all falls back to the configured name.
+
+    This writes into the user's git tree. Generated files carry a header saying so, and
     regeneration overwrites them.
     """
-    configured = (project.playwright_config or {}).get("testDirectory") or "tests"
-    directory = Path(project.repository_path) / configured
+    root = playwright_root(project)
+    config = discovery.find_repository_config(Path(project.repository_path))
+    collected = None
+    if config is not None:
+        try:
+            collected = discovery.collected_dir_of(config.read_text(encoding="utf-8"))
+        except OSError:
+            collected = None
+
+    if collected:
+        directory = (root / collected / GENERATED_SUBDIR).resolve()
+    else:
+        directory = root / playwright_setting(project, "test_directory", "tests")
+
     directory.mkdir(parents=True, exist_ok=True)
     return directory
 
@@ -565,7 +637,7 @@ def generate_playwright_for_scenario(scenario_id: str) -> None:
             return
 
         context = generation.build_context(feature, project.repository_path)
-        base_url = (project.playwright_config or {}).get("baseUrl") or "http://localhost:8080"
+        base_url = _base_url_for(project)
 
         spec = playwright_gen.generate_spec(
             context,
@@ -586,7 +658,22 @@ def generate_playwright_for_scenario(scenario_id: str) -> None:
         existing = db.scalar(
             select(PlaywrightTest).where(PlaywrightTest.gherkin_scenario_id == scenario.id)
         )
-        relative = f"{(project.playwright_config or {}).get('testDirectory') or 'tests'}/{spec.file_name}"
+        repository = Path(project.repository_path)
+        relative = path.relative_to(repository).as_posix()
+        # Where Playwright must be invoked from for this spec, recorded now rather than
+        # guessed at run time — the same context an imported test carries.
+        working_directory = playwright_root(project).relative_to(repository).as_posix()
+        if working_directory == ".":
+            working_directory = ""
+
+        # The same reasoning as for an imported test: without the right `--project`, a
+        # suite needing a live backend can be dragged into a run that never wanted one.
+        config = discovery.find_repository_config(repository)
+        playwright_project = (
+            discovery.project_for(config.read_text(encoding="utf-8"), config.parent, path)
+            if config is not None
+            else None
+        )
         if existing is None:
             existing = PlaywrightTest(
                 id=next_reference(db, PlaywrightTest, "pw"),
@@ -597,6 +684,8 @@ def generate_playwright_for_scenario(scenario_id: str) -> None:
             db.add(existing)
         existing.scenario = scenario.scenario
         existing.file = relative
+        existing.working_directory = working_directory
+        existing.playwright_project = playwright_project
         existing.source = spec.source
         existing.test_status = "not_run"
         existing.result = {
@@ -730,7 +819,7 @@ def run_playwright_test(run_id: str) -> None:
         base_url = (
             None
             if test.origin == "discovered"
-            else (project.playwright_config or {}).get("baseUrl") or "http://localhost:8080"
+            else _base_url_for(project)
         )
         try:
             outcome = execution.run_spec(

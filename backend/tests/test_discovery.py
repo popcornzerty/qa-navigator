@@ -299,3 +299,69 @@ class TestSelector:
         import re as _re
 
         assert _re.compile(grep_for("passe")).search("a.spec.ts:4:3 Suite celui-ci passe")
+
+
+class TestRepositoryConfig:
+    """Choosing where a generated spec is written, which decides whether it can run."""
+
+    def _monorepo(self, tmp_path: Path) -> Path:
+        (tmp_path / "frontend" / "node_modules").mkdir(parents=True)
+        (tmp_path / "frontend" / "playwright.config.ts").write_text(
+            'export default { use: { baseURL: "http://localhost:5180" } };', encoding="utf-8"
+        )
+        return tmp_path
+
+    def test_the_installation_decides_not_the_root(self, tmp_path: Path):
+        """A spec written at the root is run by an npx download that cannot resolve
+        `@playwright/test`, and the run dies on the import line."""
+        from qa_engine.discovery import find_repository_config
+
+        root = self._monorepo(tmp_path)
+        assert find_repository_config(root) == root / "frontend" / "playwright.config.ts"
+
+    def test_a_config_with_an_installation_beats_a_shallower_one(self, tmp_path: Path):
+        from qa_engine.discovery import find_repository_config
+
+        root = self._monorepo(tmp_path)
+        (root / "playwright.config.ts").write_text("export default {};", encoding="utf-8")
+        assert find_repository_config(root).parent.name == "frontend"
+
+    def test_a_repository_without_any_config_has_none(self, tmp_path: Path):
+        from qa_engine.discovery import find_repository_config
+
+        assert find_repository_config(tmp_path) is None
+
+    def test_the_declared_base_url_is_read(self, tmp_path: Path):
+        from qa_engine.discovery import base_url_of, find_repository_config
+
+        root = self._monorepo(tmp_path)
+        config = find_repository_config(root)
+        assert base_url_of(config.read_text(encoding="utf-8")) == "http://localhost:5180"
+
+
+class TestStringsAreNotComments:
+    """`//` only starts a comment outside a string."""
+
+    def test_a_url_in_a_config_survives(self):
+        from qa_engine.discovery import base_url_of
+
+        # Cut at `"http:` before this, so a generated spec was aimed at nothing.
+        assert base_url_of('use: { baseURL: "http://localhost:5180" }') == "http://localhost:5180"
+
+    def test_a_url_in_a_test_title_survives(self):
+        source = 'test("ouvre https://exemple.fr/page", async () => {});'
+        assert [item.title for item in extract_tests(source, "a.spec.ts")] == [
+            "ouvre https://exemple.fr/page"
+        ]
+
+    def test_a_real_comment_is_still_neutralised(self):
+        assert extract_tests('// test("faux", () => {});', "a.spec.ts") == []
+
+    def test_a_brace_after_a_url_still_counts(self):
+        """Blanking the rest of the line past a false comment shifted describe nesting."""
+        source = (
+            'const base = "https://exemple.fr"; test.describe("Suite", () => {\n'
+            '  test("dedans", async () => {});\n});\n'
+        )
+        found = extract_tests(source, "a.spec.ts")
+        assert [item.full_title for item in found] == [f"Suite{TITLE_SEPARATOR}dedans"]
