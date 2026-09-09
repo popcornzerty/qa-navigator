@@ -189,3 +189,67 @@ def test_reanalysis_keeps_stories_attached_to_their_feature(tmp_path: Path):
             assert story.feature_id in live, "the story lost its feature after re-analysis"
         finally:
             db.close()
+
+
+def test_an_analysis_interrupted_by_a_restart_is_not_left_running(tmp_path: Path):
+    """In-process jobs die with the process; their row does not, and nothing resumes them."""
+    from qa_engine.database import SessionLocal
+    from qa_engine.models import Analysis, Project
+    from qa_engine.services import initial_steps, recover_interrupted_analyses
+
+    repo = _repository(tmp_path, "interrupted")
+
+    with TestClient(app) as client:
+        project_id = _create_project(client, repo, "Interrupted")
+
+    db = SessionLocal()
+    try:
+        steps = initial_steps()
+        steps[6]["status"] = "running"
+        analysis = Analysis(
+            project_id=project_id, status="running", progress=75, steps=steps
+        )
+        db.add(analysis)
+        project = db.get(Project, project_id)
+        project.project_status = "analyzing"
+        db.commit()
+        analysis_id = analysis.id
+
+        assert recover_interrupted_analyses(db) == 1
+
+        db.expire_all()
+        recovered = db.get(Analysis, analysis_id)
+        assert recovered.status == "failed"
+        assert "interrompue" in recovered.error.lower()
+        assert recovered.completed_at is not None
+        # The step that was mid-flight says so, instead of spinning for ever.
+        assert [s for s in recovered.steps if s["key"] == "stories"][0]["status"] == "failed"
+        # And the project is no longer stuck showing an analysis in progress.
+        assert db.get(Project, project_id).project_status != "analyzing"
+    finally:
+        db.close()
+
+
+def test_recovery_leaves_finished_analyses_alone(tmp_path: Path):
+    from qa_engine.database import SessionLocal
+    from qa_engine.models import Analysis
+    from qa_engine.services import recover_interrupted_analyses
+
+    repo = _repository(tmp_path, "finished")
+
+    with TestClient(app) as client:
+        project_id = _create_project(client, repo, "Finished")
+
+    db = SessionLocal()
+    try:
+        analysis = Analysis(project_id=project_id, status="completed", progress=100, steps=[])
+        db.add(analysis)
+        db.commit()
+        analysis_id = analysis.id
+
+        recover_interrupted_analyses(db)
+
+        db.expire_all()
+        assert db.get(Analysis, analysis_id).status == "completed"
+    finally:
+        db.close()

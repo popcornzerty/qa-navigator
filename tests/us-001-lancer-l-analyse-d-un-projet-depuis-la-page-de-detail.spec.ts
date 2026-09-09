@@ -11,19 +11,29 @@ test.describe("Projets", () => {
     // Des étapes n'ont pas pu être automatisées : le test est marqué à traiter.
     test.fixme();
     await test.step("Étant donné Je suis sur la page de détail d'un projet", async () => {
-      // TODO manuel : étape non automatisable avec les éléments détectés
+      await page.goto('http://localhost:8080/projects/1');
+      await page.getByTestId('app-ready').waitFor();
     });
     await test.step("Quand Je clique sur le bouton « Analyze Repository »", async () => {
-      // TODO manuel : étape non automatisable avec les éléments détectés
+      await page.getByTestId('project-analyze').click();
     });
     await test.step("Alors La page d'analyse du projet s'affiche", async () => {
-      // TODO manuel : étape non automatisable avec les éléments détectés
+      await page.goto('http://localhost:8080/projects/1/analysis');
+      await page.getByTestId('app-ready').waitFor();
     });
     await test.step("Et L'en-tête affiche « Repository analysis »", async () => {
-      // TODO manuel : étape non automatisable avec les éléments détectés
+      await expect(page.getByTestId('page-title')).toHaveText('Repository analysis');
     });
     await test.step("Et Les étapes du pipeline sont listées : Repository, Architecture, Routes, Components, APIs, Features, User Stories, Gherkin", async () => {
-      // TODO manuel : étape non automatisable avec les éléments détectés
+      await expect(page.getByTestId('metric-coverage')).toBeVisible();
+      await expect(page.getByTestId('metric-features')).toBeVisible();
+      await expect(page.getByTestId('metric-gherkin')).toBeVisible();
+      await expect(page.getByTestId('metric-playwright')).toBeVisible();
+      await expect(page.getByTestId('metric-user-stories')).toBeVisible();
+      await expect(page.getByTestId('metric-features')).toBeVisible();
+      // TODO manuel (data-testid "metric-apis" introuvable dans le code analysé) : await expect(page.getByTestId('metric-apis')).toBeVisible();
+      // TODO manuel (data-testid "metric-components" introuvable dans le code analysé) : await expect(page.getByTestId('metric-components')).toBeVisible();
+      // TODO manuel (data-testid "metric-routes" introuvable dans le code analysé) : await expect(page.getByTestId('metric-routes')).toBeVisible();
     });
   });
 });

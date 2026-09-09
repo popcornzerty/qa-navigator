@@ -7,6 +7,8 @@ ungrounded reaches a generated file, and a spec that cannot drive the app says s
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from qa_engine import generation, playwright_gen
 
 
@@ -207,7 +209,7 @@ def test_a_fully_unusable_answer_is_retried_once(tmp_path: Path, monkeypatch):
         base_url="http://localhost:8080",
     )
 
-    assert calls == [0.2, 0.0], "the retry must be deterministic"
+    assert calls == [0.2, playwright_gen.RETRY_TEMPERATURE], "the retry must diverge, not replay"
     assert spec.is_runnable
     assert 'await page.goto("/cart");' in spec.source
 
@@ -242,3 +244,264 @@ def test_a_partly_usable_answer_is_not_retried(tmp_path: Path, monkeypatch):
 
     assert calls == [0.2]
     assert len(spec.unresolved) == 1
+
+
+def test_missing_await_is_repaired():
+    """An un-awaited expect() asserts nothing and the test still reports green."""
+    line, reason = playwright_gen.validate_line(
+        "expect(page.getByTestId('cart-total')).toBeVisible();", {"cart-total"}
+    )
+    assert reason is None
+    assert line == "await expect(page.getByTestId('cart-total')).toBeVisible();"
+
+
+def test_missing_await_is_repaired_on_actions():
+    line, _ = playwright_gen.validate_line("page.getByTestId('cart-line').click();", {"cart-line"})
+    assert line == "await page.getByTestId('cart-line').click();"
+
+
+def test_an_existing_await_is_not_doubled():
+    line, _ = playwright_gen.validate_line('await page.goto("/cart");', set())
+    assert line == 'await page.goto("/cart");'
+
+
+def test_a_locator_declaration_is_not_awaited():
+    line, _ = playwright_gen.validate_line(
+        "const row = page.getByTestId('cart-line');", {"cart-line"}
+    )
+    assert line == "const row = page.getByTestId('cart-line');"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "/projects/$projectId/analysis",
+        "/users/:id",
+        "/posts/{slug}",
+        "/files/[name]",
+        "/projects/${projectId}",
+    ],
+)
+def test_unresolved_route_parameters_are_rejected(url: str):
+    """A URL still carrying a parameter cannot be navigated to."""
+    line, reason = playwright_gen.validate_line(f"await page.goto('{url}');", set())
+    assert line is None
+    assert "paramètre de route non résolu" in reason
+
+
+def test_a_concrete_url_is_accepted():
+    line, reason = playwright_gen.validate_line('await page.goto("/projects");', set())
+    assert reason is None
+    assert line == 'await page.goto("/projects");'
+
+
+def test_the_retry_tells_the_model_what_went_wrong(tmp_path: Path, monkeypatch):
+    """Replaying the identical prompt would just resample the mode that already failed."""
+    prompts: list[str] = []
+
+    def answer(_system, prompt, _schema, *, temperature=0.2):
+        prompts.append(prompt)
+        if len(prompts) == 1:
+            return {"etapes": []}
+        return {"etapes": [{"index": 1, "code": ['await page.goto("/cart");']}]}
+
+    monkeypatch.setattr(playwright_gen.ollama, "chat_json", answer)
+
+    playwright_gen.generate_spec(
+        _context(tmp_path),
+        story_id="US-030",
+        story_title="Story",
+        scenario_id="US-030-SC-1",
+        scenario_name="Scénario",
+        given=["contexte"],
+        when=[],
+        then=[],
+        base_url="http://localhost:8080",
+    )
+
+    assert len(prompts) == 2
+    assert prompts[1].startswith(prompts[0])
+    assert "aucune instruction exploitable" in prompts[1]
+
+
+def test_the_prompt_does_not_offer_an_empty_list_escape_hatch(tmp_path: Path, monkeypatch):
+    """An easy way out is the way the model takes when the constraints get tight."""
+    captured: list[str] = []
+    monkeypatch.setattr(
+        playwright_gen.ollama,
+        "chat_json",
+        lambda _s, prompt, _sc, **k: captured.append(prompt) or {"etapes": []},
+    )
+
+    playwright_gen.generate_spec(
+        _context(tmp_path),
+        story_id="US-031",
+        story_title="Story",
+        scenario_id="US-031-SC-1",
+        scenario_name="Scénario",
+        given=["contexte"],
+        when=[],
+        then=[],
+        base_url="http://localhost:8080",
+    )
+
+    assert "renvoie une liste vide" not in captured[0]
+    assert "jamais une liste `etapes` vide" in captured[0]
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "await page.goto('http://localhost:8080/projects');",
+        'await page.goto("https://staging.example.test/cart");',
+        "await expect(page).toHaveURL('http://localhost:8080/projects');",
+    ],
+)
+def test_navigation_to_a_real_url_is_not_mistaken_for_a_dangerous_call(line: str):
+    """`http` as a bare word rejected the very navigation the model is asked to write."""
+    accepted, reason = playwright_gen.validate_line(line, set())
+    assert accepted is not None, reason
+    assert reason is None
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'import fs from "fs";',
+        "await page.evaluate(() => require('child_process'));",
+        "const data = fs.readFileSync('/etc/passwd');",
+        "await page.evaluate(() => eval('1+1'));",
+        "const cwd = process.cwd();",
+        "await http.get('http://internal/secret');",
+    ],
+)
+def test_dangerous_constructs_are_still_rejected(line: str):
+    accepted, reason = playwright_gen.validate_line(line, set())
+    assert accepted is None, f"should have been refused: {line}"
+    assert reason
+
+
+def test_only_parameterless_routes_are_directly_reachable():
+    routes = [
+        "/projects",
+        "/projects/",
+        "/projects/$projectId",
+        "/projects/$projectId/analysis",
+        "/projects/new",
+        "/users/:id",
+        "/posts/{slug}",
+    ]
+    assert playwright_gen.reachable_routes(routes) == {"/projects", "/projects/new"}
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "/projects/1",
+        "/projects/7e10d6b1-48fa",
+        "http://localhost:8080/projects/1/analysis",
+    ],
+)
+def test_navigating_to_an_invented_id_is_refused(url: str):
+    """`/projects/1` looks concrete, passes every other check, and lands on a 404."""
+    line, reason = playwright_gen.validate_line(
+        f"await page.goto('{url}');", set(), {"/projects", "/"}
+    )
+    assert line is None
+    assert "navigue par l'interface" in reason
+
+
+@pytest.mark.parametrize("url", ["/projects", "/projects/", "http://localhost:8080/projects?a=1"])
+def test_navigating_to_a_known_route_is_allowed(url: str):
+    line, reason = playwright_gen.validate_line(
+        f"await page.goto('{url}');", set(), {"/projects", "/"}
+    )
+    assert reason is None, reason
+    assert line is not None
+
+
+def test_route_checking_is_skipped_when_no_route_list_is_given():
+    """Callers that have no analysis to lean on must not have every navigation refused."""
+    line, reason = playwright_gen.validate_line("await page.goto('/anything');", set())
+    assert reason is None
+    assert line is not None
+
+
+def test_the_prompt_lists_the_directly_reachable_routes(tmp_path: Path, monkeypatch):
+    captured: list[str] = []
+    monkeypatch.setattr(
+        playwright_gen.ollama,
+        "chat_json",
+        lambda _s, prompt, _sc, **k: captured.append(prompt) or {"etapes": []},
+    )
+
+    context = _context(tmp_path)
+    context.routes = ["/cart", "/cart/$itemId"]
+    playwright_gen.generate_spec(
+        context,
+        story_id="US-040",
+        story_title="Story",
+        scenario_id="US-040-SC-1",
+        scenario_name="Scénario",
+        given=["contexte"],
+        when=[],
+        then=[],
+        base_url="http://localhost:8080",
+    )
+
+    assert "Routes ouvrables directement par page.goto : /cart" in captured[0]
+    assert "/cart/$itemId" not in captured[0]
+
+
+def test_a_step_keeps_its_working_assertions_when_some_are_dropped(tmp_path: Path, monkeypatch):
+    """Marking the whole test fixme would discard the assertions that do hold."""
+    payload = {
+        "etapes": [
+            {
+                "index": 1,
+                "code": [
+                    'await expect(page.getByTestId("cart-total")).toBeVisible();',
+                    'await expect(page.getByTestId("inexistant")).toBeVisible();',
+                ],
+            }
+        ]
+    }
+    monkeypatch.setattr(playwright_gen.ollama, "chat_json", lambda *a, **k: payload)
+
+    spec = playwright_gen.generate_spec(
+        _context(tmp_path),
+        story_id="US-050",
+        story_title="Story",
+        scenario_id="US-050-SC-1",
+        scenario_name="Scénario",
+        given=["contexte"],
+        when=[],
+        then=[],
+        base_url="http://localhost:8080",
+    )
+
+    assert spec.is_runnable, "a step with working code must not block the test"
+    assert "test.fixme()" not in spec.source
+    assert 'await expect(page.getByTestId("cart-total")).toBeVisible();' in spec.source
+    # The dropped line stays visible in the file so the gap is reviewable.
+    assert "// TODO manuel" in spec.source
+
+
+def test_a_step_with_nothing_executable_still_blocks(tmp_path: Path, monkeypatch):
+    payload = {"etapes": [{"index": 1, "code": ["console.log('nope');"]}]}
+    monkeypatch.setattr(playwright_gen.ollama, "chat_json", lambda *a, **k: payload)
+
+    spec = playwright_gen.generate_spec(
+        _context(tmp_path),
+        story_id="US-051",
+        story_title="Story",
+        scenario_id="US-051-SC-1",
+        scenario_name="Scénario",
+        given=["contexte"],
+        when=[],
+        then=[],
+        base_url="http://localhost:8080",
+    )
+
+    assert not spec.is_runnable
+    assert "test.fixme()" in spec.source

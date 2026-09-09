@@ -722,3 +722,43 @@ def regenerate_gherkin_for_story(story_id: str) -> None:
         logger.exception("Gherkin regeneration crashed for %s", story_id)
     finally:
         db.close()
+
+
+def recover_interrupted_analyses(db: Session) -> int:
+    """Fail analyses that were still in flight when the engine stopped.
+
+    Analyses run in-process, so a restart — a crash, a deploy, or someone stopping the
+    service — kills the job without touching its row. Left alone the analysis stays
+    `running` forever, the project stays `analyzing`, and nothing will ever resume it: the
+    UI shows a spinner that never ends.
+
+    Called at startup, before the service accepts requests.
+    """
+    stranded = list(
+        db.scalars(select(Analysis).where(Analysis.status.in_(["queued", "running"])))
+    )
+    for analysis in stranded:
+        analysis.status = "failed"
+        analysis.error = (
+            "Analyse interrompue par un arrêt du moteur. Les résultats déjà produits sont "
+            "conservés ; relancez une analyse pour reprendre."
+        )
+        analysis.completed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        # New dicts, not in-place edits: mutating the loaded objects and reassigning the
+        # same list leaves old and new identical, so SQLAlchemy sees no change and never
+        # issues the UPDATE.
+        analysis.steps = [
+            {**step, "status": "failed", "detail": "Interrompu par un arrêt du moteur"}
+            if step.get("status") == "running"
+            else dict(step)
+            for step in (analysis.steps or [])
+        ]
+
+        project = db.get(Project, analysis.project_id)
+        if project and project.project_status == "analyzing":
+            project.project_status = "ready" if project.last_analysis else "never_analyzed"
+
+    if stranded:
+        db.commit()
+        logger.warning("Recovered %d analysis(es) interrupted by a restart", len(stranded))
+    return len(stranded)
