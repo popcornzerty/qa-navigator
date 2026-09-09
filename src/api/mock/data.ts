@@ -675,6 +675,7 @@ export const tests: PlaywrightTest[] = testSeeds.map((seed, index) => {
   return {
     id: `pw-${String(index + 1).padStart(3, "0")}`,
     projectId: story.projectId,
+    origin: "code" as const,
     userStoryId: story.id,
     userStoryKey: story.jiraKey ?? story.id,
     gherkinScenarioId: scenario.id,

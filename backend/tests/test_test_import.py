@@ -174,3 +174,19 @@ def test_discovered_tests_do_not_inflate_story_coverage(tmp_path: Path):
         # ...but they prove nothing about a stated requirement.
         assert report["userStories"]["automated"] == 0
         assert report["coverage"] == 0.0
+
+
+def test_regenerating_a_hand_written_test_is_refused(tmp_path: Path):
+    """The spec file belongs to its author; the engine must not overwrite it."""
+    repo = _repository(tmp_path, "protect")
+    with TestClient(app) as client:
+        project_id = _create_and_analyse(client, repo, "Protect")
+        test_id = client.get(f"{PREFIX}/tests?project_id={project_id}").json()[0]["id"]
+
+        response = client.post(f"{PREFIX}/tests/{test_id}/regenerate")
+        assert response.status_code == 409
+        assert "écraserait" in response.json()["detail"]
+
+        # And the file is untouched.
+        spec = repo / "frontend" / "e2e" / "portefeuille.spec.ts"
+        assert spec.read_text(encoding="utf-8") == SUITE

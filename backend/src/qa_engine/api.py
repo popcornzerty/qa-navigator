@@ -560,6 +560,17 @@ def regenerate_test(
     test = db.get(models.PlaywrightTest, test_id)
     if not test:
         raise HTTPException(status_code=404, detail="Playwright test not found")
+    # Regeneration writes the spec file. A discovered test is its author's work, not the
+    # engine's, and there is no scenario to regenerate it from: refuse rather than
+    # overwrite. The UI disables the button, but the file's safety cannot depend on that.
+    if test.origin == "discovered" or not test.gherkin_scenario_id:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Ce test existait déjà dans le dépôt : il n'a pas été généré à partir d'un "
+                "scénario Gherkin et le régénérer écraserait le fichier de son auteur."
+            ),
+        )
     background_tasks.add_task(generate_playwright_for_scenario, test.gherkin_scenario_id)
     return schemas.JobRead(job_id=test.gherkin_scenario_id, status="queued", progress=0)
 

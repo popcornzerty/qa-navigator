@@ -114,12 +114,25 @@ class TestConfigResolution:
         spec.write_text("test('x', () => {})", encoding="utf-8")
         assert project_for(CONFIG, tmp_path, spec) == "bouchonne"
 
-    def test_a_suite_needing_a_backend_is_not_dragged_in(self, tmp_path: Path):
-        """`reel` and `connexion` share a testDir, so neither can be chosen alone."""
+    def test_a_project_restricted_by_testmatch_does_not_claim_the_directory(self, tmp_path: Path):
+        """`connexion` shares e2e-reel with `reel` but only owns its setup file."""
         (tmp_path / "e2e-reel").mkdir()
-        spec = tmp_path / "e2e-reel/portefeuille.spec.ts"
+        spec = tmp_path / "e2e-reel/mur.spec.ts"
         spec.write_text("test('x', () => {})", encoding="utf-8")
-        assert project_for(CONFIG, tmp_path, spec) is None
+        assert project_for(CONFIG, tmp_path, spec) == "reel"
+
+    def test_a_genuinely_shared_directory_stays_undecided(self, tmp_path: Path):
+        """Two unrestricted projects on one testDir: guessing would risk the wrong one."""
+        config = """
+        export default { projects: [
+          { name: "chrome", testDir: "e2e" },
+          { name: "firefox", testDir: "e2e" },
+        ] };
+        """
+        (tmp_path / "e2e").mkdir()
+        spec = tmp_path / "e2e/a.spec.ts"
+        spec.write_text("test('x', () => {})", encoding="utf-8")
+        assert project_for(config, tmp_path, spec) is None
 
     def test_a_config_without_projects_selects_none(self, tmp_path: Path):
         spec = tmp_path / "a.spec.ts"

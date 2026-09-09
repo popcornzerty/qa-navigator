@@ -47,7 +47,7 @@ function TestDetailPage() {
 
   const { data: story } = useQuery({
     queryKey: ["story", test?.userStoryId],
-    queryFn: () => storiesApi.get(test!.userStoryId),
+    queryFn: () => storiesApi.get(test!.userStoryId!),
     enabled: Boolean(test?.userStoryId),
   });
 
@@ -195,14 +195,24 @@ function TestDetailPage() {
           </Panel>
 
           <Panel>
-            <PanelHeader title="User Story" meta={test.userStoryId} />
+            <PanelHeader title="User Story" meta={test.userStoryId ?? "—"} />
             <PanelBody className="space-y-3">
-              <p className="text-sm">{story?.title ?? "—"}</p>
-              <Link to="/backlog/$storyId" params={{ storyId: test.userStoryId }}>
-                <Button variant="outline" size="sm">
-                  Open user story
-                </Button>
-              </Link>
+              {test.userStoryId ? (
+                <>
+                  <p className="text-sm">{story?.title ?? "—"}</p>
+                  <Link to="/backlog/$storyId" params={{ storyId: test.userStoryId }}>
+                    <Button variant="outline" size="sm">
+                      Open user story
+                    </Button>
+                  </Link>
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  This test already existed in the repository. It was written against the
+                  product directly, so it traces to no User Story — and proves nothing about
+                  one.
+                </p>
+              )}
             </PanelBody>
           </Panel>
         </div>

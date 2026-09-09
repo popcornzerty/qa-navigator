@@ -93,14 +93,22 @@ export interface TestResult {
   consoleOutput?: string[];
 }
 
+/** Where a test came from — which is what tells the reader how much it proves.
+ *  `code` and `jira` both mean the engine wrote it, and differ by what it was written
+ *  from; `discovered` means the repository already shipped with it. */
+export type TestOrigin = "code" | "jira" | "manual" | "discovered";
+
 export interface PlaywrightTest {
   id: string;
   projectId: string;
-  userStoryId: string;
-  userStoryKey: string;
-  gherkinScenarioId: string;
+  /** Null for a discovered test: it was written against the product, not against a
+   *  stated requirement, so it traces to no User Story. */
+  userStoryId: string | null;
+  userStoryKey: string | null;
+  gherkinScenarioId: string | null;
   scenario: string;
   file: string;
+  origin: TestOrigin;
   status: TestStatus;
   lastRun: string | null;
   durationMs: number;

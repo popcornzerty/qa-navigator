@@ -15,6 +15,12 @@ from sqlalchemy.engine import Engine
 
 from qa_engine.database import Base
 
+# `Base.metadata` is populated as a side effect of the model classes being defined, so a
+# caller that has not imported them hands this module an empty schema — and every check
+# below then finds nothing to do and reports success. Importing here makes the module
+# self-sufficient instead of silently doing nothing.
+from qa_engine import models as _models  # noqa: F401  (imported for its side effect)
+
 logger = logging.getLogger(__name__)
 
 # Tables rebuilt from scratch by every analysis. Dropping them loses no user input, so a
@@ -108,22 +114,40 @@ def _rebuild_table(engine: Engine, table) -> None:
     name = table.name
     backup = f"{name}__migration_backup"
     inspector = inspect(engine)
-    carried = [
-        column.name
-        for column in table.columns
-        if column.name in {item["name"] for item in inspector.get_columns(name)}
-    ]
+    physical = {item["name"] for item in inspector.get_columns(name)}
+
+    # Columns the rebuild introduces have no value in the old rows. Taking the model's
+    # own default matters: filling `origin` with an empty string would leave every
+    # existing test with a provenance the application does not recognise.
+    carried: list[str] = []
+    selected: list[str] = []
+    for column in table.columns:
+        if column.name in physical:
+            carried.append(column.name)
+            selected.append(f'"{column.name}"')
+        elif not column.nullable:
+            carried.append(column.name)
+            selected.append(_default_literal(column) or "''")
+
     columns = ", ".join(f'"{column}"' for column in carried)
+    projection = ", ".join(selected)
+
+    # Renaming a table carries its indexes along under their original names, so
+    # recreating the table would collide with them. They are dropped first, and recreated
+    # by `table.create` from the model.
+    indexes = [item["name"] for item in inspector.get_indexes(name) if item.get("name")]
 
     logger.warning("Rebuilding table %s (nullability changed)", name)
     with engine.begin() as connection:
         connection.execute(text("PRAGMA foreign_keys=OFF"))
         connection.execute(text(f'DROP TABLE IF EXISTS "{backup}"'))
         connection.execute(text(f'ALTER TABLE "{name}" RENAME TO "{backup}"'))
+        for index in indexes:
+            connection.execute(text(f'DROP INDEX IF EXISTS "{index}"'))
     table.create(bind=engine)
     with engine.begin() as connection:
         connection.execute(
-            text(f'INSERT INTO "{name}" ({columns}) SELECT {columns} FROM "{backup}"')
+            text(f'INSERT INTO "{name}" ({columns}) SELECT {projection} FROM "{backup}"')
         )
         connection.execute(text(f'DROP TABLE "{backup}"'))
         connection.execute(text("PRAGMA foreign_keys=ON"))

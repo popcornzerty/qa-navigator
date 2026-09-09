@@ -11,7 +11,7 @@ import { Panel, PanelBody, PanelHeader } from "../components/ui/panel";
 import { StatusBadge } from "../components/ui/status-badge";
 import { useCurrentProject } from "../lib/current-project";
 import { formatDateTime, formatDuration } from "../lib/format";
-import type { TestStatus } from "../types/models";
+import type { TestOrigin, TestStatus } from "../types/models";
 
 export const Route = createFileRoute("/automation/")({
   head: () => ({
@@ -33,6 +33,30 @@ export const Route = createFileRoute("/automation/")({
 });
 
 const STATUS_FILTERS: (TestStatus | "all")[] = ["all", "passed", "failed", "skipped", "not_run"];
+
+/** How a test came to exist. The label matters more than the value: "existing" is the
+ *  honest word for a test the repository already had, and it is the one distinction that
+ *  changes how much a green run is worth. */
+const ORIGIN_FILTERS: { value: TestOrigin | "all"; label: string }[] = [
+  { value: "all", label: "all origins" },
+  { value: "discovered", label: "existing" },
+  { value: "code", label: "from code" },
+  { value: "jira", label: "from Jira" },
+];
+
+const ORIGIN_LABELS: Record<TestOrigin, string> = {
+  discovered: "Existing",
+  code: "From code",
+  jira: "From Jira",
+  manual: "Manual",
+};
+
+const ORIGIN_STYLES: Record<TestOrigin, string> = {
+  discovered: "bg-amber-500/10 text-amber-400 ring-amber-500/30",
+  code: "bg-primary/10 text-primary ring-primary/30",
+  jira: "bg-sky-500/10 text-sky-400 ring-sky-500/30",
+  manual: "bg-panel2 text-muted-foreground ring-line",
+};
 const chip = "rounded-md px-2.5 py-1 text-xs ring-1 transition-colors whitespace-nowrap capitalize";
 const chipOn = "bg-primary/10 text-primary ring-primary/30";
 const chipOff = "bg-panel2 text-muted-foreground ring-line hover:text-foreground";
@@ -41,12 +65,13 @@ function AutomationPage() {
   const { projectId } = useCurrentProject();
   const queryClient = useQueryClient();
   const [status, setStatus] = useState<TestStatus | "all">("all");
+  const [origin, setOrigin] = useState<TestOrigin | "all">("all");
 
   const filters = useMemo<TestFilters>(() => {
-    const value: TestFilters = { status };
+    const value: TestFilters = { status, origin };
     if (projectId) value.projectId = projectId;
     return value;
-  }, [projectId, status]);
+  }, [projectId, status, origin]);
 
   const { data: tests = [] } = useQuery({
     queryKey: ["tests", filters],
@@ -93,7 +118,7 @@ function AutomationPage() {
     <>
       <PageHeader
         title="Automation"
-        subtitle="Playwright suite generated from validated Gherkin scenarios"
+        subtitle="Playwright suite: what the engine generated, and what the repository already had"
       />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -132,10 +157,23 @@ function AutomationPage() {
           meta={`${tests.length} shown`}
           actions={
             <div className="flex flex-wrap items-center gap-1.5">
+              {ORIGIN_FILTERS.map((item) => (
+                <button
+                  key={item.value}
+                  type="button"
+                  data-testid={`filter-origin-${item.value}`}
+                  onClick={() => setOrigin(item.value)}
+                  className={`${chip} ${origin === item.value ? chipOn : chipOff}`}
+                >
+                  {item.label}
+                </button>
+              ))}
+              <span aria-hidden className="mx-1 h-4 w-px bg-line" />
               {STATUS_FILTERS.map((value) => (
                 <button
                   key={value}
                   type="button"
+                  data-testid={`filter-status-${value}`}
                   onClick={() => setStatus(value)}
                   className={`${chip} ${status === value ? chipOn : chipOff}`}
                 >
@@ -151,6 +189,7 @@ function AutomationPage() {
             <thead>
               <tr className="border-b border-line text-left text-[11px] tracking-wider text-dim uppercase">
                 <th className="px-4 py-2 font-medium">File</th>
+                <th className="px-3 py-2 font-medium">Origin</th>
                 <th className="px-3 py-2 font-medium">User Story</th>
                 <th className="px-3 py-2 font-medium">Scenario</th>
                 <th className="px-3 py-2 font-medium">Last execution</th>
@@ -168,13 +207,25 @@ function AutomationPage() {
                 >
                   <td className="px-4 py-3 font-mono text-[12px]">{test.file}</td>
                   <td className="px-3 py-3">
-                    <Link
-                      to="/backlog/$storyId"
-                      params={{ storyId: test.userStoryId }}
-                      className="font-mono text-[11px] text-primary hover:underline"
+                    <span
+                      data-testid="test-origin"
+                      className={`rounded-md px-2 py-0.5 text-[11px] whitespace-nowrap ring-1 ${ORIGIN_STYLES[test.origin]}`}
                     >
-                      {test.userStoryKey}
-                    </Link>
+                      {ORIGIN_LABELS[test.origin]}
+                    </span>
+                  </td>
+                  <td className="px-3 py-3">
+                    {test.userStoryId ? (
+                      <Link
+                        to="/backlog/$storyId"
+                        params={{ storyId: test.userStoryId }}
+                        className="font-mono text-[11px] text-primary hover:underline"
+                      >
+                        {test.userStoryKey}
+                      </Link>
+                    ) : (
+                      <span className="text-[11px] text-dim">—</span>
+                    )}
                   </td>
                   <td className="max-w-72 truncate px-3 py-3 text-muted-foreground">
                     {test.scenario}
@@ -208,7 +259,12 @@ function AutomationPage() {
                         variant="ghost"
                         size="sm"
                         data-testid="test-regenerate"
-                        disabled={regenerate.isPending}
+                        disabled={regenerate.isPending || test.origin === "discovered"}
+                        title={
+                          test.origin === "discovered"
+                            ? "This test was written by hand — regenerating would overwrite it."
+                            : undefined
+                        }
                         onClick={() => regenerate.mutate(test.id)}
                       >
                         Regenerate
@@ -219,7 +275,7 @@ function AutomationPage() {
               ))}
               {tests.length === 0 ? (
                 <tr>
-                  <td colSpan={7}>
+                  <td colSpan={8}>
                     <PanelBody className="text-center text-sm text-muted-foreground">
                       No Playwright test matches this filter.
                     </PanelBody>

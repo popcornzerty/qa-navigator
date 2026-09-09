@@ -1,4 +1,4 @@
-import type { PlaywrightTest, TestStatus } from "../types/models";
+import type { PlaywrightTest, TestOrigin, TestStatus } from "../types/models";
 import { clone, http, resolve } from "./client";
 import * as db from "./mock/data";
 
@@ -6,6 +6,7 @@ export interface TestFilters {
   projectId?: string;
   userStoryId?: string;
   status?: TestStatus | "all";
+  origin?: TestOrigin | "all";
 }
 
 export const testsApi = {
@@ -18,6 +19,8 @@ export const testsApi = {
             if (filters.userStoryId && test.userStoryId !== filters.userStoryId) return false;
             if (filters.status && filters.status !== "all" && test.status !== filters.status)
               return false;
+            if (filters.origin && filters.origin !== "all" && test.origin !== filters.origin)
+              return false;
             return true;
           }),
         ),
@@ -26,6 +29,7 @@ export const testsApi = {
         if (filters.projectId) params.set("project_id", filters.projectId);
         if (filters.userStoryId) params.set("story_id", filters.userStoryId);
         if (filters.status && filters.status !== "all") params.set("status", filters.status);
+        if (filters.origin && filters.origin !== "all") params.set("origin", filters.origin);
         return http<PlaywrightTest[]>(`/tests?${params.toString()}`);
       },
     );

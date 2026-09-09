@@ -79,7 +79,11 @@ function BacklogPage() {
 
   const testsByStory = useMemo(() => {
     const map = new Map<string, number>();
-    for (const test of tests) map.set(test.userStoryId, (map.get(test.userStoryId) ?? 0) + 1);
+    // A discovered test belongs to no story, so it is counted against none.
+    for (const test of tests) {
+      if (!test.userStoryId) continue;
+      map.set(test.userStoryId, (map.get(test.userStoryId) ?? 0) + 1);
+    }
     return map;
   }, [tests]);
 

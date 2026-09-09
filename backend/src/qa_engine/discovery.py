@@ -52,6 +52,10 @@ DESCRIBE_START = re.compile(r"\b(?:test\.describe|describe)\b")
 # Playwright config: `name: "bouchonne"` and `testDir: "e2e"` inside a `projects: [...]`.
 PROJECT_NAME = re.compile(r"\bname\s*:\s*(['\"`])(?P<value>[^'\"`]+)\1")
 PROJECT_TESTDIR = re.compile(r"\btestDir\s*:\s*(['\"`])(?P<value>[^'\"`]+)\1")
+# `testMatch: ["**/connexion.setup.ts"]` narrows a project to part of its testDir, so two
+# projects can share a directory and still own different files.
+PROJECT_TESTMATCH = re.compile(r"\btestMatch\s*:\s*(?P<value>\[[^\]]*\]|['\"`][^'\"`]+['\"`])")
+GLOB_LITERAL = re.compile(r"['\"`]([^'\"`]+)['\"`]")
 
 # Comments and strings are stripped before brace counting so that a `{` inside a comment
 # does not shift the describe stack.
@@ -144,21 +148,44 @@ def project_for(config_text: str, config_dir: Path, spec_absolute: Path) -> str 
     project's `testDir` contains the spec.
     """
     cleaned = strip_comments(config_text)
-    matches: list[tuple[str, Path]] = []
+    spec = spec_absolute.resolve()
+    owning: list[str] = []
+
     for block in _project_blocks(cleaned):
         name = PROJECT_NAME.search(block)
         test_dir = PROJECT_TESTDIR.search(block)
         if not name or not test_dir:
             continue
-        matches.append((name.group("value"), (config_dir / test_dir.group("value")).resolve()))
+        directory = (config_dir / test_dir.group("value")).resolve()
+        if directory not in spec.parents:
+            continue
+        patterns = _test_match(block)
+        if patterns and not _matches_any(spec.relative_to(directory).as_posix(), patterns):
+            continue
+        owning.append(name.group("value"))
 
-    spec = spec_absolute.resolve()
-    owning = [name for name, directory in matches if directory in spec.parents]
     if len(owning) == 1:
         return owning[0]
     if len(owning) > 1:
         logger.info("Several Playwright projects claim %s: %s", spec, ", ".join(owning))
     return None
+
+
+def _test_match(block: str) -> list[str]:
+    found = PROJECT_TESTMATCH.search(block)
+    return GLOB_LITERAL.findall(found.group("value")) if found else []
+
+
+def _matches_any(relative_path: str, patterns: list[str]) -> bool:
+    candidate = PurePosixPath(relative_path)
+    for pattern in patterns:
+        # `**/` matches zero or more directories, which `full_match` reads as one or more.
+        variants = {pattern}
+        if pattern.startswith("**/"):
+            variants.add(pattern[3:])
+        if any(candidate.full_match(variant) for variant in variants):
+            return True
+    return False
 
 
 def _project_blocks(config_text: str) -> list[str]:
