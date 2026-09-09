@@ -126,3 +126,36 @@ def test_ansi_colour_codes_are_stripped(tmp_path: Path):
 
     assert outcome.error_message == "expect(locator).toBeVisible() failed"
     assert outcome.console_output == ["[out] ok"]
+
+
+def test_the_child_does_not_inherit_no_color(tmp_path: Path, monkeypatch):
+    """Node warns on every run when NO_COLOR meets the FORCE_COLOR Playwright sets itself.
+
+    The variable describes the terminal of whoever started the engine, which has nothing
+    to do with a subprocess whose output is captured and re-rendered.
+    """
+    captured: dict[str, dict[str, str]] = {}
+
+    class _Fake:
+        stdout = iter(())
+        returncode = 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    def fake_popen(command, **kwargs):
+        captured["env"] = kwargs["env"]
+        raise OSError("stopped before running")
+
+    spec = tmp_path / "tests"
+    spec.mkdir()
+    (spec / "a.spec.ts").write_text("test('x', () => {})", encoding="utf-8")
+
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setattr(execution.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(execution, "_find_npx", lambda: "npx")
+
+    with pytest.raises(execution.ExecutionError):
+        execution.run_spec(str(tmp_path), "tests/a.spec.ts")
+
+    assert "NO_COLOR" not in captured["env"]

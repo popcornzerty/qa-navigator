@@ -302,6 +302,13 @@ def run_spec(
     # retries, tripling the duration of every failing run. The HTML reporter is already
     # configured with `open: "never"`, so nothing tries to open a browser either way.
     environment = {**os.environ}
+    # `NO_COLOR` belongs to whoever started the engine and describes *their* terminal. It
+    # has no meaning for a subprocess whose output is captured and re-rendered as HTML,
+    # and Playwright sets `FORCE_COLOR` for its own workers regardless — Node then prints
+    # a warning about the contradiction at the top of every single run. Colour codes are
+    # stripped from the log anyway, so the engine drops the variable rather than pass an
+    # argument the child cannot honour.
+    environment.pop("NO_COLOR", None)
     # Only set for specs the engine generated, which read it. A repository's own config
     # decides its base URL, and overriding it would point its suite at the wrong app.
     if base_url:
