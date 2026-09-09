@@ -6,6 +6,7 @@ import { testsApi } from "../api";
 import type { TestFilters } from "../api/tests";
 import { PageHeader } from "../components/layout/app-shell";
 import { Button } from "../components/ui/button";
+import { ORIGIN_PROVES, OriginBadge } from "../components/qa/origin-badge";
 import { MetricCard } from "../components/ui/metric-card";
 import { Panel, PanelBody, PanelHeader } from "../components/ui/panel";
 import { StatusBadge } from "../components/ui/status-badge";
@@ -51,19 +52,6 @@ const ORIGIN_FILTERS: { value: TestOrigin | "all"; label: string }[] = [
   { value: "jira", label: "from Jira" },
 ];
 
-const ORIGIN_LABELS: Record<TestOrigin, string> = {
-  discovered: "Existing",
-  code: "From code",
-  jira: "From Jira",
-  manual: "Manual",
-};
-
-const ORIGIN_STYLES: Record<TestOrigin, string> = {
-  discovered: "bg-amber-500/10 text-amber-400 ring-amber-500/30",
-  code: "bg-primary/10 text-primary ring-primary/30",
-  jira: "bg-sky-500/10 text-sky-400 ring-sky-500/30",
-  manual: "bg-panel2 text-muted-foreground ring-line",
-};
 const chip = "rounded-md px-2.5 py-1 text-xs ring-1 transition-colors whitespace-nowrap capitalize";
 const chipOn = "bg-primary/10 text-primary ring-primary/30";
 const chipOff = "bg-panel2 text-muted-foreground ring-line hover:text-foreground";
@@ -197,6 +185,16 @@ function AutomationPage() {
           }
         />
 
+        {origin === "all" ? null : (
+          <p
+            data-testid="origin-claim"
+            className="border-b border-line px-4 py-2.5 text-xs text-muted-foreground"
+          >
+            <span className="text-foreground">A passing run proves:</span>{" "}
+            {ORIGIN_PROVES[origin]}
+          </p>
+        )}
+
         <div className="overflow-x-auto">
           <table data-testid="automation-table" className="w-full text-sm">
             <thead>
@@ -220,12 +218,7 @@ function AutomationPage() {
                 >
                   <td className="px-4 py-3 font-mono text-[12px]">{test.file}</td>
                   <td className="px-3 py-3">
-                    <span
-                      data-testid="test-origin"
-                      className={`rounded-md px-2 py-0.5 text-[11px] whitespace-nowrap ring-1 ${ORIGIN_STYLES[test.origin]}`}
-                    >
-                      {ORIGIN_LABELS[test.origin]}
-                    </span>
+                    <OriginBadge origin={test.origin} />
                   </td>
                   <td className="px-3 py-3">
                     {test.userStoryId ? (

@@ -113,6 +113,16 @@ function CoveragePage() {
         />
       </div>
 
+      {/* These two figures sit side by side and count different things. Left unsaid, a
+          large test count reads as coverage — and tests imported from the repository or
+          generated from the code cover no stated requirement at all. */}
+      <p data-testid="coverage-caveat" className="text-xs text-muted-foreground">
+        <span className="text-foreground">Automated tests</span> counts every test, whatever
+        its origin. <span className="text-foreground">Coverage</span> counts only acceptance
+        criteria proven by a test traced to a User Story — an imported test, or one generated
+        from the code, adds to the first and not to the second.
+      </p>
+
       <div className="grid gap-5 lg:grid-cols-3">
         <Panel>
           <PanelHeader title="Overall coverage" meta="acceptance criteria" />

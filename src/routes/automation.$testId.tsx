@@ -5,6 +5,12 @@ import { formatGherkin, storiesApi, testsApi } from "../api";
 import { PageHeader } from "../components/layout/app-shell";
 import { Button } from "../components/ui/button";
 import { GherkinBlock } from "../components/ui/gherkin-block";
+import {
+  ORIGIN_EXPLANATIONS,
+  ORIGIN_LABELS,
+  ORIGIN_PROVES,
+  OriginBadge,
+} from "../components/qa/origin-badge";
 import { Panel, PanelBody, PanelHeader } from "../components/ui/panel";
 import { StatusBadge } from "../components/ui/status-badge";
 import { formatDateTime, formatDuration, label } from "../lib/format";
@@ -243,6 +249,24 @@ function TestDetailPage() {
           ) : null}
 
           <Panel>
+            <PanelHeader title="Origin" meta={ORIGIN_LABELS[test.origin]} />
+            <PanelBody className="space-y-3">
+              <div className="flex items-center gap-2 text-sm">
+                <OriginBadge origin={test.origin} />
+                <span className="text-muted-foreground">
+                  proves: {ORIGIN_PROVES[test.origin]}
+                </span>
+              </div>
+              <p
+                data-testid="origin-explanation"
+                className="text-sm leading-relaxed text-muted-foreground"
+              >
+                {ORIGIN_EXPLANATIONS[test.origin]}
+              </p>
+            </PanelBody>
+          </Panel>
+
+          <Panel>
             <PanelHeader title="Test" meta={test.id} />
             <PanelBody className="space-y-3">
               <Row label="File" value={test.file} mono />
@@ -267,9 +291,8 @@ function TestDetailPage() {
                 </>
               ) : (
                 <p className="text-sm text-muted-foreground">
-                  This test already existed in the repository. It was written against the
-                  product directly, so it traces to no User Story — and proves nothing about
-                  one.
+                  This test traces to no User Story. See Origin for what a passing run
+                  establishes.
                 </p>
               )}
             </PanelBody>
