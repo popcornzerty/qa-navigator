@@ -244,14 +244,21 @@ class TestResultRead(Wire):
     console_output: list[str] | None = None
 
 
+# Where a test came from, which is what tells the reader how much it proves.
+# `code` and `jira` both mean the engine wrote it, and differ by what it was written
+# from; `discovered` means the repository already had it.
+TestOrigin = Literal["code", "jira", "manual", "discovered"]
+
+
 class PlaywrightTestRead(Wire):
     id: str
     project_id: str
-    user_story_id: str
-    user_story_key: str
-    gherkin_scenario_id: str
+    user_story_id: str | None
+    user_story_key: str | None
+    gherkin_scenario_id: str | None
     scenario: str
     file: str
+    origin: TestOrigin
     status: TestStatus
     last_run: datetime | None
     duration_ms: int

@@ -38,7 +38,10 @@ def coverage_report(db: Session, project_id: str | None) -> schemas.CoverageRepo
     scenarios = [scenario for story in stories for scenario in story.gherkin_scenarios]
     criteria = [item for story in stories for item in story.acceptance_criteria]
     covered = [item for item in criteria if item.covered]
-    automated_story_ids = {test.user_story_id for test in tests}
+    # Discovered tests carry no story, so they automate none. Their `None` would sit in
+    # this set harmlessly, but leaving it there invites a later reader to assume the set
+    # is a story index. `automation` below still counts them: they are real automation.
+    automated_story_ids = {test.user_story_id for test in tests if test.user_story_id}
 
     gaps: list[schemas.CoverageGapRead] = []
     for story in stories:

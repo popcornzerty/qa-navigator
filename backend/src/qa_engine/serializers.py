@@ -134,6 +134,20 @@ def story(row: models.UserStory) -> schemas.UserStoryRead:
     )
 
 
+def test_origin(row: models.PlaywrightTest, story_row: models.UserStory | None) -> str:
+    """How a test came to exist, as the UI labels it.
+
+    A generated test inherits the provenance of the story it was written from, because
+    that is the distinction that matters to the reader: a spec derived from a Jira story
+    traces to a stated requirement, one derived from code traces only to code.
+    """
+    if row.origin == "discovered":
+        return "discovered"
+    if story_row is not None and story_row.origin in {"jira", "manual"}:
+        return story_row.origin
+    return "code"
+
+
 def test(row: models.PlaywrightTest, story_row: models.UserStory | None) -> schemas.PlaywrightTestRead:
     payload = dict(row.result or {})
     payload.setdefault("status", row.test_status)
@@ -147,6 +161,7 @@ def test(row: models.PlaywrightTest, story_row: models.UserStory | None) -> sche
         gherkin_scenario_id=row.gherkin_scenario_id,
         scenario=row.scenario,
         file=row.file,
+        origin=test_origin(row, story_row),
         status=row.test_status,
         last_run=row.last_run,
         duration_ms=row.duration_ms,

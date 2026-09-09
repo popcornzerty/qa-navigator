@@ -502,6 +502,7 @@ def list_tests(
     project_id: str | None = None,
     story_id: str | None = None,
     test_status: str | None = Query(default=None, alias="status"),
+    origin: str | None = None,
     db: Session = Depends(get_db),
 ):
     statement = select(models.PlaywrightTest)
@@ -512,8 +513,17 @@ def list_tests(
     if test_status and test_status != "all":
         statement = statement.where(models.PlaywrightTest.test_status == test_status)
     rows = list(db.scalars(statement.order_by(models.PlaywrightTest.id)))
-    stories = {row.user_story_id: db.get(models.UserStory, row.user_story_id) for row in rows}
-    return [serializers.test(row, stories.get(row.user_story_id)) for row in rows]
+    stories = {
+        row.user_story_id: db.get(models.UserStory, row.user_story_id)
+        for row in rows
+        if row.user_story_id
+    }
+    serialised = [serializers.test(row, stories.get(row.user_story_id)) for row in rows]
+    # Filtered after serialisation: "code" versus "jira" is a property of the story a
+    # test was generated from, not a column on the test itself.
+    if origin and origin != "all":
+        serialised = [item for item in serialised if item.origin == origin]
+    return serialised
 
 
 @router.get("/tests/{test_id}", response_model=schemas.PlaywrightTestRead)
@@ -521,7 +531,8 @@ def get_test(test_id: str, db: Session = Depends(get_db)):
     test = db.get(models.PlaywrightTest, test_id)
     if not test:
         raise HTTPException(status_code=404, detail="Playwright test not found")
-    return serializers.test(test, db.get(models.UserStory, test.user_story_id))
+    story = db.get(models.UserStory, test.user_story_id) if test.user_story_id else None
+    return serializers.test(test, story)
 
 
 @router.post(

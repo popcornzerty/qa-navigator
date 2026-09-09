@@ -9,7 +9,7 @@ import subprocess
 import urllib.parse
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from qa_engine.config import settings
 
@@ -20,6 +20,41 @@ except ImportError:  # pragma: no cover - dependency is declared, fallback keeps
 
 
 SOURCE_EXTENSIONS = {".js", ".jsx", ".ts", ".tsx", ".mjs", ".cjs"}
+
+# A test file is evidence of coverage, never evidence of a feature. Reading one as
+# application code invents functional domains that describe the tests instead of the
+# product, so the two are separated at the source: `source_files()` feeds the analyser,
+# `test_files()` feeds the test importer.
+TEST_FILE = re.compile(r"\.(?:spec|test)\.[cm]?[jt]sx?$", re.IGNORECASE)
+
+# Directories holding a test suite. Everything under them is test material: the specs
+# themselves, but also their fixtures, stubs and page objects. `e2e/bouchons.ts` is not a
+# runnable test, yet reading it as application code would describe the stubs as if they
+# were product behaviour.
+TEST_DIRS = {
+    "e2e",
+    "e2e-reel",
+    "tests",
+    "test",
+    "__tests__",
+    "cypress",
+    "fixtures",
+    "__mocks__",
+    "test-utils",
+}
+
+
+def is_test_file(relative_path: str) -> bool:
+    """True for a runnable test file — one the importer can register and execute."""
+    return bool(TEST_FILE.search(PurePosixPath(relative_path).name))
+
+
+def is_test_material(relative_path: str) -> bool:
+    """True for anything belonging to a test suite, runnable or supporting."""
+    path = PurePosixPath(relative_path)
+    return is_test_file(relative_path) or any(part in TEST_DIRS for part in path.parent.parts)
+
+
 # Directories never worth scanning. Beyond JS build output, this covers Python virtual
 # environments: in a monorepo the engine's own `.venv` sits inside the repository it
 # analyses, and walking it would cost thousands of files for nothing.
@@ -41,6 +76,12 @@ EXCLUDED_DIRS = {
     ".output",
     ".wrangler",
     ".tanstack",
+    # Agent tooling, not product code. `.claude` holds skills, evaluation fixtures and
+    # git worktrees that duplicate the entire repository — scanning it reports every file
+    # twice and turns evaluation artefacts into functional domains.
+    ".claude",
+    "worktrees",
+    ".worktrees",
 }
 
 
@@ -95,7 +136,8 @@ class LocalRepositoryProvider(RepositoryProvider):
         except OSError:
             return True
 
-    def source_files(self) -> list[RepositoryFile]:
+    def _walk(self) -> list[RepositoryFile]:
+        """Every readable JavaScript/TypeScript file, tests included."""
         results: list[RepositoryFile] = []
         for current_root, dirs, files in os.walk(self.root):
             current = Path(current_root)
@@ -114,6 +156,14 @@ class LocalRepositoryProvider(RepositoryProvider):
                 if not self._is_binary(absolute):
                     results.append(RepositoryFile(absolute, relative.as_posix()))
         return sorted(results, key=lambda item: item.relative_path)
+
+    def source_files(self) -> list[RepositoryFile]:
+        """Application code only — what the analyser may treat as evidence of a feature."""
+        return [item for item in self._walk() if not is_test_material(item.relative_path)]
+
+    def test_files(self) -> list[RepositoryFile]:
+        """Existing test files — what the importer registers as pre-existing coverage."""
+        return [item for item in self._walk() if is_test_file(item.relative_path)]
 
 
 class GitUrlError(ValueError):

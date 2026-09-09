@@ -64,6 +64,12 @@ SPEC_SCHEMA = {
 }
 
 # A failed sample is retried by sampling wider, never by replaying the same mode.
+# First line of every generated spec. The importer keys on it to avoid registering
+# the engine's own output as a pre-existing test.
+GENERATED_MARKER = (
+    "// Généré par AI QA Agent — ne pas éditer à la main, la régénération écrase ce fichier."
+)
+
 RETRY_TEMPERATURE = 0.7
 
 GHERKIN_KEYWORDS = ("Étant donné", "Quand", "Alors")
@@ -332,7 +338,7 @@ def generate_spec(
             body, unresolved = retry_body, retry_unresolved
 
     header = [
-        "// Généré par AI QA Agent — ne pas éditer à la main, la régénération écrase ce fichier.",
+        GENERATED_MARKER,
         f"// User Story : {story_id} — {story_title}",
         f"// Scénario   : {scenario_id} — {scenario_name}",
         f"// Domaine    : {context.name}",

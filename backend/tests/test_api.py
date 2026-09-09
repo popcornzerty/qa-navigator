@@ -47,7 +47,11 @@ def test_project_analysis_and_features(tmp_path: Path):
 
         job = client.get(f"{PREFIX}/jobs/{job_id}").json()
         assert job["status"] == "completed"
-        assert job["progress"] == 75  # generation steps are not wired yet
+        # Generation steps are not wired in this fixture, so the pipeline stops before
+        # them. Derived rather than hard-coded: adding a step should not fail this test.
+        keys = [step["key"] for step in job["steps"]]
+        analysed = keys.index("stories")
+        assert job["progress"] == round(analysed / len(keys) * 100)
         assert [step["key"] for step in job["steps"]][:3] == [
             "repository",
             "architecture",
@@ -205,7 +209,8 @@ def test_an_analysis_interrupted_by_a_restart_is_not_left_running(tmp_path: Path
     db = SessionLocal()
     try:
         steps = initial_steps()
-        steps[6]["status"] = "running"
+        stories_step = next(i for i, step in enumerate(steps) if step["key"] == "stories")
+        steps[stories_step]["status"] = "running"
         analysis = Analysis(
             project_id=project_id, status="running", progress=75, steps=steps
         )

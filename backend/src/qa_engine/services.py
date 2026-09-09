@@ -22,6 +22,8 @@ from qa_engine.analyzer import extract_repository_metadata
 from qa_engine.config import settings
 from qa_engine.database import SessionLocal
 from qa_engine.features import group_symbols, shared_test_ids
+from qa_engine import discovery
+from qa_engine.repositories import LocalRepositoryProvider
 from qa_engine.repositories import GitCloneError, GitRepositoryProvider
 from qa_engine.models import (
     AcceptanceCriterion,
@@ -42,6 +44,7 @@ STEPS: list[tuple[str, str]] = [
     ("routes", "Routes"),
     ("components", "Components"),
     ("apis", "APIs"),
+    ("existing_tests", "Existing tests"),
     ("features", "Features"),
     ("stories", "User Stories"),
     ("gherkin", "Gherkin"),
@@ -316,6 +319,97 @@ def _relink_stories_to_features(db: Session, project_id: str) -> int:
     return relinked
 
 
+def import_existing_tests(db: Session, project: Project) -> tuple[int, int]:
+    """Register the tests the repository already ships with.
+
+    Returns ``(tests, files)``. Existing rows are matched on file and title rather than
+    replaced wholesale, so a re-analysis keeps the execution history of a test that is
+    still there, and drops only the ones that genuinely disappeared.
+    """
+    root = Path(project.repository_path)
+    try:
+        candidates = LocalRepositoryProvider(root).test_files()
+    except ValueError:
+        return 0, 0
+
+    generated_files = set(
+        db.scalars(
+            select(PlaywrightTest.file).where(
+                PlaywrightTest.project_id == project.id,
+                PlaywrightTest.origin == "generated",
+            )
+        )
+    )
+
+    existing = {
+        (row.file, row.selector): row
+        for row in db.scalars(
+            select(PlaywrightTest).where(
+                PlaywrightTest.project_id == project.id,
+                PlaywrightTest.origin == "discovered",
+            )
+        )
+    }
+    seen: set[tuple[str, str | None]] = set()
+    imported = 0
+    files = 0
+
+    for candidate in candidates:
+        if candidate.relative_path in generated_files:
+            continue
+        try:
+            text = candidate.absolute_path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        # The engine's own specs live in the analysed repository. Re-importing them would
+        # list every generated test twice, once under each origin.
+        if playwright_gen.GENERATED_MARKER in text:
+            continue
+
+        found = discovery.extract_tests(text, candidate.relative_path)
+        if not found:
+            continue
+
+        config = discovery.find_config(root, candidate.relative_path)
+        if config is None:
+            # Without a config Playwright has no testDir, no webServer and no baseURL:
+            # the file can be listed but not run, so it is not offered as runnable.
+            logger.info("No Playwright config governs %s; skipped", candidate.relative_path)
+            continue
+        working_directory = config.parent.relative_to(root).as_posix()
+        playwright_project = discovery.project_for(
+            config.read_text(encoding="utf-8"), config.parent, candidate.absolute_path
+        )
+
+        files += 1
+        for test in found:
+            key = (test.file, test.full_title)
+            seen.add(key)
+            row = existing.get(key)
+            if row is None:
+                row = PlaywrightTest(
+                    id=next_reference(db, PlaywrightTest, "pw"),
+                    project_id=project.id,
+                    origin="discovered",
+                    file=test.file,
+                    selector=test.full_title,
+                    test_status="not_run",
+                )
+                db.add(row)
+                db.flush()  # so the next next_reference() sees this id
+            row.scenario = test.full_title
+            row.working_directory = working_directory
+            row.playwright_project = playwright_project
+            imported += 1
+
+    for key, row in existing.items():
+        if key not in seen:
+            db.delete(row)
+
+    db.commit()
+    return imported, files
+
+
 def run_analysis(analysis_id: str) -> None:
     """In-process job runner, deliberately replaceable by Celery/RQ later."""
     db = SessionLocal()
@@ -365,6 +459,15 @@ def run_analysis(analysis_id: str) -> None:
         writer.complete("components", f"{counts['component']} composants indexés")
         writer.start("apis")
         writer.complete("apis", f"{counts['api_call']} appels API référencés")
+
+        writer.start("existing_tests")
+        imported, test_files = import_existing_tests(db, project)
+        writer.complete(
+            "existing_tests",
+            f"{imported} tests existants dans {test_files} fichiers"
+            if imported
+            else "aucun test existant détecté",
+        )
 
         writer.start("features")
         discovered = group_symbols(symbols)
@@ -528,9 +631,23 @@ def run_playwright_test(test_id: str) -> None:
         if not project:
             return
 
-        base_url = (project.playwright_config or {}).get("baseUrl") or "http://localhost:8080"
+        # A generated spec reads PLAYWRIGHT_BASE_URL, so the engine supplies it. A
+        # discovered one obeys its own repository's config, and overriding its base URL
+        # would aim a working suite at the wrong application.
+        base_url = (
+            None
+            if test.origin == "discovered"
+            else (project.playwright_config or {}).get("baseUrl") or "http://localhost:8080"
+        )
         try:
-            outcome = execution.run_spec(project.repository_path, test.file, base_url=base_url)
+            outcome = execution.run_spec(
+                project.repository_path,
+                test.file,
+                base_url=base_url,
+                working_directory=test.working_directory or "",
+                playwright_project=test.playwright_project,
+                grep=execution.grep_for(test.selector) if test.selector else None,
+            )
         except execution.ExecutionError as exc:
             # The runner never started: that is a failure of the run, not of the test.
             logger.warning("Execution of %s could not start: %s", test_id, exc)
@@ -560,8 +677,10 @@ def run_playwright_test(test_id: str) -> None:
             "console_output": outcome.console_output or None,
         }
 
-        # A passing scenario is covered: reflect it on its acceptance criteria.
-        if outcome.status == "passed":
+        # A passing scenario is covered: reflect it on its acceptance criteria. A
+        # discovered test has no story, so it proves nothing about a stated requirement —
+        # counting it as coverage would inflate the figure this product exists to keep honest.
+        if outcome.status == "passed" and test.user_story_id:
             story = db.get(UserStory, test.user_story_id)
             if story:
                 for criterion in story.acceptance_criteria:

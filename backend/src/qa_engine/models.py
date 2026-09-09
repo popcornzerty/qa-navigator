@@ -128,13 +128,26 @@ class PlaywrightTest(Base):
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
-    user_story_id: Mapped[str] = mapped_column(ForeignKey("user_stories.id"), index=True)
-    gherkin_scenario_id: Mapped[str] = mapped_column(
-        ForeignKey("gherkin_scenarios.id"), index=True
+    # Nullable since tests are also imported from the repository. A discovered test was
+    # written against the product directly: it has no User Story and no Gherkin scenario,
+    # and inventing one to satisfy the schema would fabricate a requirement.
+    user_story_id: Mapped[str | None] = mapped_column(
+        ForeignKey("user_stories.id"), index=True, nullable=True
+    )
+    gherkin_scenario_id: Mapped[str | None] = mapped_column(
+        ForeignKey("gherkin_scenarios.id"), index=True, nullable=True
     )
     scenario: Mapped[str] = mapped_column(String(500), default="")
     file: Mapped[str] = mapped_column(Text)
     source: Mapped[str] = mapped_column(Text, default="")
+    origin: Mapped[str] = mapped_column(String(20), default="generated")  # generated | discovered
+    # Selects this test inside its file. Discovered files hold many tests; the title is
+    # used rather than the line number so an edit above it does not retarget the run.
+    selector: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Directory Playwright runs from, relative to the repository. In a monorepo the config
+    # sits beside the application it tests, not at the root.
+    working_directory: Mapped[str] = mapped_column(String(500), default="")
+    playwright_project: Mapped[str | None] = mapped_column(String(100), nullable=True)
     test_status: Mapped[str] = mapped_column(String(20), default="not_run")
     last_run: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)

@@ -85,6 +85,50 @@ def _default_literal(column) -> str | None:
     return "''"
 
 
+def _nullability_drift(inspector, table) -> bool:
+    """True when a physical column is NOT NULL while the model now allows NULL."""
+    physical = {column["name"]: column for column in inspector.get_columns(table.name)}
+    for column in table.columns:
+        current = physical.get(column.name)
+        if current is None or column.primary_key:
+            continue
+        if column.nullable and not current["nullable"]:
+            return True
+    return False
+
+
+def _rebuild_table(engine: Engine, table) -> None:
+    """Recreate a table with its current shape, carrying existing rows over.
+
+    SQLite cannot drop a NOT NULL constraint in place, and the rows here are worth
+    keeping: `playwright_tests` holds execution history the user has already looked at.
+    The old table is renamed rather than dropped first, so a failure midway leaves the
+    data recoverable instead of destroyed.
+    """
+    name = table.name
+    backup = f"{name}__migration_backup"
+    inspector = inspect(engine)
+    carried = [
+        column.name
+        for column in table.columns
+        if column.name in {item["name"] for item in inspector.get_columns(name)}
+    ]
+    columns = ", ".join(f'"{column}"' for column in carried)
+
+    logger.warning("Rebuilding table %s (nullability changed)", name)
+    with engine.begin() as connection:
+        connection.execute(text("PRAGMA foreign_keys=OFF"))
+        connection.execute(text(f'DROP TABLE IF EXISTS "{backup}"'))
+        connection.execute(text(f'ALTER TABLE "{name}" RENAME TO "{backup}"'))
+    table.create(bind=engine)
+    with engine.begin() as connection:
+        connection.execute(
+            text(f'INSERT INTO "{name}" ({columns}) SELECT {columns} FROM "{backup}"')
+        )
+        connection.execute(text(f'DROP TABLE "{backup}"'))
+        connection.execute(text("PRAGMA foreign_keys=ON"))
+
+
 def ensure_schema(engine: Engine) -> None:
     """Align the physical database with the declarative models."""
     inspector = inspect(engine)
@@ -103,9 +147,16 @@ def ensure_schema(engine: Engine) -> None:
                 connection.execute(text(f"DROP TABLE {table_name}"))
             existing_tables.discard(table_name)
 
+    # 2. Rebuild tables whose columns became nullable, keeping their rows.
+    inspector = inspect(engine)
+    for table_name in set(inspector.get_table_names()):
+        table = Base.metadata.tables.get(table_name)
+        if table is not None and _nullability_drift(inspector, table):
+            _rebuild_table(engine, table)
+
     Base.metadata.create_all(bind=engine)
 
-    # 2. Add columns that appeared on tables holding data we must keep.
+    # 3. Add columns that appeared on tables holding data we must keep.
     inspector = inspect(engine)
     for table_name, table in Base.metadata.tables.items():
         if table_name not in set(inspector.get_table_names()):
