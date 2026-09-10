@@ -710,3 +710,46 @@ class TestUnsatisfiableScenarios:
         for target in ("#a-propos", "#cgu", "#confidentialite", "#mentions-legales"):
             body.append(f"await expect(page).toHaveURL('http://x/{target}');")
         assert len(self.check(*body)) == 3
+
+
+class TestHomeRoute:
+    """An opening step describing an initial state has to become a concrete address."""
+
+    def test_the_root_wins_when_it_exists(self):
+        assert playwright_gen.home_route({"/", "/panier"}) == "/"
+
+    def test_an_application_reached_only_by_fragments_is_still_served_at_its_root(self):
+        """Starting from `#cgu` produced a test that opened its own destination."""
+        assert playwright_gen.home_route({"#a-propos", "#cgu"}) == "/"
+
+    def test_the_shallowest_path_stands_in_when_there_is_no_root(self):
+        assert playwright_gen.home_route({"/backlog/x", "/automation", "/backlog"}) == "/backlog"
+
+    def test_a_repository_with_no_route_still_has_a_home(self):
+        assert playwright_gen.home_route(set()) == "/"
+
+
+def test_the_home_is_named_and_allowed(tmp_path: Path, monkeypatch):
+    """Recommending an address the check below would refuse is worse than saying nothing."""
+    captured: list[str] = []
+
+    def capture(_system, prompt, _schema, **kwargs):
+        captured.append(prompt)
+        return {"etapes": [{"index": 1, "code": ["await page.goto('/');"]}]}
+
+    monkeypatch.setattr(playwright_gen.ollama, "chat_json", capture)
+
+    context = SimpleNamespace(
+        name="Frontend", description="", routes=["#cgu"], components=[], api_calls=[],
+        test_ids=[], controls=[], has_form=False, source_files=[], excerpts=[],
+    )
+    spec = playwright_gen.generate_spec(
+        context, story_id="US-060", story_title="T", scenario_id="US-060-SC-1",
+        scenario_name="S", given=["l'utilisateur est sur la page d'accueil"], when=[], then=[],
+        base_url="http://localhost:5180",
+    )
+
+    assert "Adresse d'accueil : /" in captured[0]
+    # And the address the prompt recommends survives validation.
+    assert "await page.goto('/');" in spec.source
+    assert spec.is_runnable

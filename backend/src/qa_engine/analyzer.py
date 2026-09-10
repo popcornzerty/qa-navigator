@@ -31,6 +31,9 @@ ROUTE_PATTERNS = [
 # as real: `#mentions-legales` can be opened directly, and a test can go straight to it.
 # Only read from a file that actually reads `location.hash`, so that a CSS selector such
 # as `querySelector("#total")` is never mistaken for an address.
+# `href="#cgu"` or `href="/panier"` written directly in the markup.
+HREF_LITERAL = re.compile(r"""\bhref\s*=\s*["'](?P<value>[^"']+)["']""")
+
 HASH_ROUTE = re.compile(r"(['\"])(?P<value>#[A-Za-z][\w-]*)\1")
 USES_LOCATION_HASH = re.compile(r"\blocation\.hash\b|['\"]hashchange['\"]")
 
@@ -156,6 +159,16 @@ def _line_number(text: str, position: int) -> int:
     return text.count("\n", 0, position) + 1
 
 
+def _href_addresses(text: str) -> list[tuple[str, int]]:
+    """Addresses reachable through an `href`, whether written out or rendered from data."""
+    found = [
+        (match.group("value"), match.start())
+        for match in HREF_LITERAL.finditer(text)
+    ]
+    found.extend(literals.mapped_attribute(text, "href"))
+    return [(value, offset) for value, offset in found if value.startswith(("/", "#"))]
+
+
 def _role_of(tag: str, attributes: str) -> str | None:
     """The ARIA role of an element, or None when it cannot be told."""
     explicit = EXPLICIT_ROLE.search(attributes)
@@ -265,6 +278,13 @@ def extract_symbols(text: str, relative_path: str) -> list[DiscoveredSymbol]:
             symbols.append(
                 DiscoveredSymbol(value, "route", relative_path, _line_number(text, match.start()))
             )
+
+    # An `href` is the most direct evidence an address exists — no corroboration needed,
+    # unlike a bare `#fragment` literal, which may be a CSS selector. Both the literal
+    # form and the one rendered from data are read: an application that centralises its
+    # addresses in a table would otherwise appear to reach nowhere.
+    for value, offset in _href_addresses(text):
+        symbols.append(DiscoveredSymbol(value, "route", relative_path, _line_number(text, offset)))
 
     if USES_LOCATION_HASH.search(text):
         for match in HASH_ROUTE.finditer(text):

@@ -181,6 +181,29 @@ def reachable_routes(routes: list[str]) -> set[str]:
     }
 
 
+def home_route(routes: set[str]) -> str:
+    """Where a scenario starts when its opening step describes an initial state.
+
+    "L'utilisateur se trouve sur la page d'accueil" has to become a concrete address, and
+    with only a list of destinations to choose from the generator picked one of them —
+    producing a test that opens the page it is about to navigate to, then asserts it
+    arrived. It passes, and proves nothing.
+
+    `/` is the answer whenever it exists, and it always does for a web application: an
+    application reached only through fragments is still served at its root, and clearing
+    the fragment returns there. A repository whose addresses are all sub-paths falls back
+    to the shortest of them.
+    """
+    if not routes or "/" in routes:
+        return "/"
+    paths = sorted(
+        (route for route in routes if route.startswith("/")),
+        key=lambda route: (route.count("/"), len(route)),
+    )
+    # Fragments are parts of one page, so the page itself is the home.
+    return paths[0] if paths else "/"
+
+
 def validate_line(
     line: str,
     known_test_ids: set[str],
@@ -313,7 +336,10 @@ def _build_prompt(
         else ""
     )
 
-    direct = sorted(reachable_routes(context.routes))
+    reachable = reachable_routes(context.routes)
+    home = home_route(reachable)
+    reachable.add(home)
+    direct = sorted(reachable)
     routes = ", ".join(direct) if direct else "aucune"
 
     # Offered only when the anchor exists. Stated unconditionally, the rule was followed
@@ -333,6 +359,11 @@ def _build_prompt(
         "Ce sont les SEULES adresses valides : n'en invente aucune autre, ni dans un "
         "`page.goto(...)`, ni dans un `toHaveURL(...)`. Toute autre page contient un "
         "paramètre dans son URL et ne s'atteint qu'en naviguant depuis l'une d'elles.\n"
+        f"Adresse d'accueil : {home}\n"
+        "Une étape « Étant donné » qui décrit un état de départ — « l'utilisateur est "
+        f"connecté », « sur la page d'accueil » — s'ouvre sur {home}, jamais sur la page "
+        "que le scénario doit atteindre : partir de la destination ferait un test qui "
+        "arrive là où il était déjà, et qui ne prouve rien.\n"
         f"Ancres data-testid réellement présentes dans le code : {anchors}\n"
         f"{control_block}\n"
         f"USER STORY : {story_title}\n"
@@ -477,6 +508,10 @@ def generate_spec(
     # most likely answer, which is exactly the one that just failed. It samples higher
     # instead, and says plainly what was wrong with the previous reply.
     allowed_routes = reachable_routes(context.routes)
+    # The home is navigable whether or not a router declared it, so it belongs among the
+    # addresses a test may open — otherwise the very address the prompt recommends for an
+    # opening step would be refused by the check below it.
+    allowed_routes.add(home_route(allowed_routes))
     controls = getattr(context, "controls", []) or []
     body, unresolved = _render_steps(
         steps, known_test_ids, allowed_routes, controls, prompt, temperature=0.2

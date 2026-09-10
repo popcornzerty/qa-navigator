@@ -131,6 +131,47 @@ def resolve(name: str, arrays: dict[str, list[dict[str, str]]], text: str) -> li
     return []
 
 
+def _iterations(text: str):
+    """Each `.map(` over a literal array: its element name, body and offset."""
+    arrays = literal_arrays(text)
+    if not arrays:
+        return
+
+    for call in MAP_CALL.finditer(text):
+        parameter = call.group("param_paren") or call.group("param_bare")
+        entries = resolve(call.group("source").split(".")[0], arrays, text)
+        if not entries or not parameter:
+            continue
+        # The paren of `.map(`, not the one wrapping its parameter: closing the latter
+        # gives an empty body and the element is never seen.
+        body = text[call.end() : _matching(text, call.start("open"), "(", ")")]
+        yield parameter, entries, body, call.start()
+
+
+def mapped_attribute(text: str, attribute: str) -> list[tuple[str, int]]:
+    """Values an attribute takes when rendered from a literal array.
+
+    `<a href={doc.adresse}>` states no address on its own. Read beside the array it
+    iterates, it states every address the application reaches — which is what a generated
+    test may navigate to, and what it must otherwise invent.
+    """
+    values: list[tuple[str, int]] = []
+    for parameter, entries, body, offset in _iterations(text):
+        pattern = re.compile(
+            r"\b"
+            + re.escape(attribute)
+            + r"\s*=\s*\{\s*"
+            + re.escape(parameter)
+            + r"\s*\.\s*(?P<field>[A-Za-z_$][\w$]*)\s*\}"
+        )
+        for match in pattern.finditer(body):
+            for entry in entries:
+                value = entry.get(match.group("field"))
+                if value:
+                    values.append((value, offset))
+    return values
+
+
 def mapped_labels(text: str) -> list[tuple[str, str, int]]:
     """Labels rendered by iterating a literal array, as ``(label, tag, offset)``.
 
