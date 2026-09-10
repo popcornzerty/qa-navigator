@@ -381,3 +381,58 @@ def test_the_prompt_forbids_asserting_an_intermediate_state(monkeypatch):
         generation.GeneratedStory(title="T", description="d", epic="e", acceptance_criteria=["c"]),
     )
     assert "après toutes" in captured[0]
+
+
+class TestScenarioTitles:
+    """A title is scanned down a backlog and becomes a Jira summary."""
+
+    def test_a_recited_title_is_reduced_to_the_action(self):
+        assert generation.tidy_title(
+            "Quand l'utilisateur clique sur le bouton de connexion, le formulaire s'affiche."
+        ) == "L'utilisateur clique sur le bouton de connexion"
+
+    def test_other_gherkin_openings_too(self):
+        assert generation.tidy_title("Lorsque le panier est vide, un message le signale") == (
+            "Le panier est vide"
+        )
+
+    def test_a_long_title_is_cut_on_a_word(self):
+        tidied = generation.tidy_title("Un titre " + "interminable " * 12)
+        assert len(tidied) <= generation.MAX_TITLE_CHARS
+        assert not tidied.endswith("interminabl")
+
+    def test_a_name_is_left_exactly_as_it_is(self):
+        for title in (
+            "Ouvrir le formulaire de connexion",
+            "Accéder à la page 'CGU' depuis le menu principal",
+        ):
+            assert generation.tidy_title(title) == title
+
+    def test_a_clumsy_title_never_costs_the_scenario(self, monkeypatch):
+        """Refusing one discarded a whole login flow and regenerated nothing at all."""
+        calls: list[float] = []
+
+        def answer(_system, _prompt, _schema, *, temperature=0.2):
+            calls.append(temperature)
+            return {
+                "scenarios": [
+                    {
+                        "scenario": "Quand il clique, le formulaire s'affiche",
+                        "etant_donne": ["il est sur l'accueil"],
+                        "quand": ["il clique"],
+                        "alors": ["le formulaire est affiché"],
+                    }
+                ]
+            }
+
+        monkeypatch.setattr(generation.ollama, "chat_json", answer)
+        context = generation.FeatureContext(
+            name="F", description="", routes=["/"], components=[], api_calls=[],
+            test_ids=[], controls=[], has_form=False, source_files=[],
+        )
+        scenarios = generation.generate_scenarios(
+            context,
+            generation.GeneratedStory(title="T", description="d", epic="e", acceptance_criteria=["c"]),
+        )
+        assert calls == [0.2], "a title is repaired, never retried"
+        assert [s.scenario for s in scenarios] == ["Il clique"]

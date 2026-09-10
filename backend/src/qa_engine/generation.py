@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 MAX_STORIES_PER_FEATURE = 3
 MAX_CRITERIA_PER_STORY = 4
 MAX_SCENARIOS_PER_STORY = 2
+# A scenario title is scanned down a backlog and becomes a Jira summary: it names the
+# scenario, it does not recite it.
+MAX_TITLE_CHARS = 80
 # A rejected sample is retried by sampling wider, never by replaying the same mode.
 SCENARIO_RETRY_TEMPERATURE = 0.7
 MAX_EXCERPT_FILES = 2
@@ -243,8 +246,41 @@ def technical_leak(step: str) -> str | None:
     return None
 
 
+def tidy_title(title: str) -> str:
+    """Turn a recited scenario into a name for it.
+
+    "Quand l'utilisateur clique sur le bouton de connexion, le formulaire de connexion
+    s'affiche sur la page d'accueil." restates the steps that follow it. These titles are
+    what a reader scans down a backlog and what becomes a Jira summary, where a whole
+    sentence costs more than it says.
+
+    Repaired rather than refused. Rejecting a scenario over its label would discard the
+    behaviour it describes for a cosmetic fault — and did exactly that: both samples of a
+    login flow opened with "Quand", every scenario was thrown away, and the regeneration
+    produced nothing at all.
+    """
+    cleaned = " ".join(title.split()).rstrip(".")
+    lowered = cleaned.lower()
+    for keyword in ("quand ", "lorsque ", "si ", "étant donné que ", "étant donné ", "alors "):
+        if lowered.startswith(keyword):
+            cleaned = cleaned[len(keyword):]
+            # What follows the keyword is the action; the clause after the comma is its
+            # result, already stated by the steps.
+            cleaned = cleaned.split(",")[0].strip()
+            break
+
+    if len(cleaned) > MAX_TITLE_CHARS:
+        cut = cleaned.rfind(" ", 0, MAX_TITLE_CHARS)
+        cleaned = cleaned[: cut if cut > 0 else MAX_TITLE_CHARS].rstrip(" ,;")
+
+    return cleaned[:1].upper() + cleaned[1:] if cleaned else title.strip()
+
+
 def _clean_scenario(candidate: "GeneratedScenario") -> tuple[bool, str | None]:
-    """Whether a scenario is free of implementation detail, and what betrayed it."""
+    """Whether a scenario is fit to publish, and what disqualified it.
+
+    Only substance disqualifies. A clumsy title is repaired by the caller.
+    """
     for bucket in (candidate.given, candidate.when, candidate.then):
         for step in bucket:
             leak = technical_leak(step)
@@ -283,6 +319,9 @@ def generate_scenarios(context: FeatureContext, story: GeneratedStory) -> list[G
         "intermédiaire. « Le formulaire est affiché » placé après l'envoi du formulaire "
         "est faux : à ce moment-là le formulaire a disparu. Si tu as besoin d'observer "
         "une étape intermédiaire, coupe le scénario en deux ;\n"
+        "- le **titre** nomme le scénario en quelques mots (« Ouvrir le formulaire de "
+        "connexion »). Il ne le récite pas : ne commence jamais un titre par « Quand », "
+        "« Lorsque » ou « Alors », et ne répète pas les étapes qui suivent ;\n"
         "- chaque étape est une phrase courte à l'infinitif ou au présent, sans « je » ;\n"
         "- interdits : URL, chemin de route, sélecteur CSS, nom de composant, nom de "
         "fichier, titre d'onglet du navigateur. Désigne les écrans par leur nom métier "
@@ -316,7 +355,7 @@ def _collect_scenarios(
         if not name:
             continue
         candidate = GeneratedScenario(
-            scenario=name,
+            scenario=tidy_title(name),
             given=[str(x).strip() for x in raw.get("etant_donne", []) if str(x).strip()],
             when=[str(x).strip() for x in raw.get("quand", []) if str(x).strip()],
             then=[str(x).strip() for x in raw.get("alors", []) if str(x).strip()],
