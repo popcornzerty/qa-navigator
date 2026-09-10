@@ -192,3 +192,106 @@ def test_regenerating_a_hand_written_test_is_refused(tmp_path: Path):
         # And the file is untouched.
         spec = repo / "frontend" / "e2e" / "portefeuille.spec.ts"
         assert spec.read_text(encoding="utf-8") == SUITE
+
+
+def _story(db, project_id: str, story_id: str, status: str = "approved"):
+    from qa_engine.models import AcceptanceCriterion, UserStory
+
+    story = UserStory(
+        id=story_id, project_id=project_id, title="Une exigence", story_status=status
+    )
+    db.add(story)
+    db.flush()
+    db.add(
+        AcceptanceCriterion(
+            id=f"{story_id}-AC-01", user_story_id=story_id, text="un critère", covered=False
+        )
+    )
+    db.commit()
+    return story
+
+
+def test_an_imported_test_can_be_attached_to_a_requirement(tmp_path: Path):
+    """Imported tests prove real behaviour and counted nowhere. The link is the statement
+    that one of them verifies a given requirement — a person's to make, never inferred."""
+    from qa_engine.database import SessionLocal
+    from qa_engine.models import AcceptanceCriterion, PlaywrightTest
+
+    repo = _repository(tmp_path, "linking")
+    with TestClient(app) as client:
+        project_id = _create_and_analyse(client, repo, "Linking")
+        test_id = client.get(f"{PREFIX}/tests?project_id={project_id}").json()[0]["id"]
+
+        db = SessionLocal()
+        try:
+            _story(db, project_id, "US-LINK")
+        finally:
+            db.close()
+
+        # Before the link, the requirement claims nothing.
+        report = client.get(f"{PREFIX}/coverage?project_id={project_id}").json()
+        assert report["coverage"] == 0.0
+
+        linked = client.patch(f"{PREFIX}/tests/{test_id}/story", json={"storyId": "US-LINK"})
+        assert linked.status_code == 200
+        assert linked.json()["userStoryId"] == "US-LINK"
+
+        # Attached but never run: still nothing proven.
+        assert client.get(f"{PREFIX}/coverage?project_id={project_id}").json()["coverage"] == 0.0
+
+        db = SessionLocal()
+        try:
+            db.get(PlaywrightTest, test_id).test_status = "passed"
+            db.commit()
+            from qa_engine.services import link_test_to_story
+
+            link_test_to_story(db, db.get(PlaywrightTest, test_id), "US-LINK")
+            assert db.get(AcceptanceCriterion, "US-LINK-AC-01").covered is True
+        finally:
+            db.close()
+
+        assert client.get(f"{PREFIX}/coverage?project_id={project_id}").json()["coverage"] == 100.0
+
+
+def test_detaching_a_test_takes_the_coverage_with_it(tmp_path: Path):
+    from qa_engine.database import SessionLocal
+    from qa_engine.models import AcceptanceCriterion, PlaywrightTest
+    from qa_engine.services import link_test_to_story
+
+    repo = _repository(tmp_path, "detach")
+    with TestClient(app) as client:
+        project_id = _create_and_analyse(client, repo, "Detach")
+        test_id = client.get(f"{PREFIX}/tests?project_id={project_id}").json()[0]["id"]
+
+        db = SessionLocal()
+        try:
+            _story(db, project_id, "US-DETACH")
+            db.get(PlaywrightTest, test_id).test_status = "passed"
+            db.commit()
+            link_test_to_story(db, db.get(PlaywrightTest, test_id), "US-DETACH")
+            assert db.get(AcceptanceCriterion, "US-DETACH-AC-01").covered is True
+        finally:
+            db.close()
+
+        client.patch(f"{PREFIX}/tests/{test_id}/story", json={"storyId": None})
+        assert client.get(f"{PREFIX}/coverage?project_id={project_id}").json()["coverage"] == 0.0
+
+
+def test_a_test_cannot_be_attached_across_projects(tmp_path: Path):
+    from qa_engine.database import SessionLocal
+
+    repo = _repository(tmp_path, "cross-a")
+    other = _repository(tmp_path, "cross-b")
+    with TestClient(app) as client:
+        project_id = _create_and_analyse(client, repo, "Cross A")
+        other_id = _create_and_analyse(client, other, "Cross B")
+        test_id = client.get(f"{PREFIX}/tests?project_id={project_id}").json()[0]["id"]
+
+        db = SessionLocal()
+        try:
+            _story(db, other_id, "US-OTHER")
+        finally:
+            db.close()
+
+        response = client.patch(f"{PREFIX}/tests/{test_id}/story", json={"storyId": "US-OTHER"})
+        assert response.status_code == 422

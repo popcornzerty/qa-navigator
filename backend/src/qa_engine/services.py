@@ -910,6 +910,27 @@ def queue_run(db: Session, test: PlaywrightTest) -> TestRun:
     return run
 
 
+def link_test_to_story(db: Session, test: PlaywrightTest, story_id: str | None) -> None:
+    """Attach a test to the requirement it covers, or detach it.
+
+    A test imported from a repository proves a behaviour without tracing to anything, so
+    it counts as automation and never as coverage. That is honest but stops short: someone
+    who knows the product can say which requirement a given test verifies, and the link is
+    that statement. It is deliberately a person's to make — inferring it from a title would
+    put a guess where a claim belongs.
+
+    Both the old and the new requirement are recomputed, since moving a test changes what
+    each of them can claim.
+    """
+    previous = test.user_story_id
+    test.user_story_id = story_id
+    db.commit()
+
+    for affected in {previous, story_id} - {None}:
+        _refresh_story_coverage(db, affected)
+    db.commit()
+
+
 def _refresh_story_coverage(db: Session, story_id: str) -> None:
     """Mark a story's criteria covered only when every scenario of it passes.
 
@@ -929,8 +950,14 @@ def _refresh_story_coverage(db: Session, story_id: str) -> None:
     scenario_ids = {scenario.id for scenario in story.gherkin_scenarios}
     tested = {test.gherkin_scenario_id for test in tests if test.gherkin_scenario_id}
 
-    verified = bool(scenario_ids) and scenario_ids <= tested and all(
-        test.test_status == "passed" for test in tests if test.gherkin_scenario_id
+    # Every test attached to the story must pass — a test someone linked by hand counts
+    # exactly as much as one generated from a scenario, because the link is the claim that
+    # it covers this requirement. And a story that has scenarios is only verified once
+    # each of them is actually exercised.
+    verified = (
+        bool(tests)
+        and all(test.test_status == "passed" for test in tests)
+        and (not scenario_ids or scenario_ids <= tested)
     )
     for criterion in story.acceptance_criteria:
         criterion.covered = verified

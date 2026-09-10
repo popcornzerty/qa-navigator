@@ -24,6 +24,7 @@ from qa_engine.services import (
     generate_backlog_for_feature,
     generate_playwright_for_scenario,
     import_jira_stories,
+    link_test_to_story,
     queue_run,
     regenerate_gherkin_for_story,
     run_analysis,
@@ -601,6 +602,35 @@ def generate_feature_backlog(
         raise HTTPException(status_code=404, detail="Feature not found")
     background_tasks.add_task(generate_backlog_for_feature, feature_id)
     return schemas.JobRead(job_id=feature_id, status="queued", progress=0)
+
+
+@router.patch("/tests/{test_id}/story", response_model=schemas.PlaywrightTestRead)
+def set_test_story(
+    test_id: str, payload: schemas.TestStoryLink, db: Session = Depends(get_db)
+):
+    """Attach a test to the requirement it covers, or detach it with a null story.
+
+    A test imported from a repository traces to nothing on its own. Someone who knows the
+    product can say which requirement it verifies; this records that statement, and the
+    coverage of both the old and the new requirement is recomputed.
+    """
+    test = db.get(models.PlaywrightTest, test_id)
+    if not test:
+        raise HTTPException(status_code=404, detail="Playwright test not found")
+
+    story = None
+    if payload.story_id is not None:
+        story = db.get(models.UserStory, payload.story_id)
+        if not story:
+            raise HTTPException(status_code=404, detail="User story not found")
+        if story.project_id != test.project_id:
+            raise HTTPException(
+                status_code=422, detail="Ce test et cette User Story appartiennent à deux projets."
+            )
+
+    link_test_to_story(db, test, payload.story_id)
+    db.refresh(test)
+    return serializers.test(test, story)
 
 
 # --- runs ----------------------------------------------------------------------------

@@ -322,6 +322,12 @@ class TestRunDetailRead(TestRunRead):
     line_count: int = 0
 
 
+class TestStoryLink(Wire):
+    """Which requirement a test covers. Null detaches it."""
+
+    story_id: str | None = None
+
+
 class JobRead(Wire):
     job_id: str
     status: str

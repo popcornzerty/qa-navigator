@@ -16,7 +16,7 @@ import { Panel, PanelBody, PanelHeader } from "../components/ui/panel";
 import { StatusBadge } from "../components/ui/status-badge";
 import { formatDateTime, formatDuration, label } from "../lib/format";
 import { cn } from "../lib/utils";
-import type { TestStatus } from "../types/models";
+import type { PlaywrightTest, TestStatus, UserStory } from "../types/models";
 
 export const Route = createFileRoute("/automation/$testId")({
   head: () => ({
@@ -81,6 +81,38 @@ function TestDetailPage() {
     onError: () => toast.error("Could not start this execution"),
   });
 
+  // Every requirement of this project, so an imported test can be attached to the one it
+  // actually verifies. Nothing here is inferred from the test itself.
+  const { data: stories = [] } = useQuery({
+    queryKey: ["stories", test?.projectId],
+    queryFn: () => storiesApi.list({ projectId: test!.projectId }),
+    enabled: Boolean(test?.projectId),
+  });
+
+  // The other tests attached to the same requirement: what is covered is a property of
+  // the requirement, never of the test you happen to be looking at.
+  const { data: storyTests = [] } = useQuery({
+    queryKey: ["tests", "story", test?.userStoryId],
+    queryFn: () => testsApi.list({ userStoryId: test!.userStoryId! }),
+    enabled: Boolean(test?.userStoryId),
+  });
+
+  const link = useMutation({
+    mutationFn: (storyId: string | null) => testsApi.linkToStory(testId, storyId),
+    onSuccess: (updated) => {
+      queryClient.invalidateQueries({ queryKey: ["test", testId] });
+      queryClient.invalidateQueries({ queryKey: ["tests"] });
+      queryClient.invalidateQueries({ queryKey: ["coverage"] });
+      queryClient.invalidateQueries({ queryKey: ["stories"] });
+      toast.success(
+        updated.userStoryId
+          ? `Test linked to ${updated.userStoryId}`
+          : "Test detached from its requirement",
+      );
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
   const regenerate = useMutation({
     mutationFn: () => testsApi.regenerate(testId),
     onSuccess: (job) => toast.success(`Regeneration queued (${job.jobId})`),
@@ -102,6 +134,10 @@ function TestDetailPage() {
 
   const scenario = story?.gherkinScenarios.find((s) => s.id === test.gherkinScenarioId);
   const result = test.result;
+
+  // Linking is not covering. Say plainly what is still missing rather than letting the
+  // criteria stay silently uncovered with no reason given.
+  const gap = coverageGap(story, storyTests);
 
   return (
     <>
@@ -255,9 +291,7 @@ function TestDetailPage() {
             <PanelBody className="space-y-3">
               <div className="flex items-center gap-2 text-sm">
                 <OriginBadge origin={test.origin} />
-                <span className="text-muted-foreground">
-                  proves: {ORIGIN_PROVES[test.origin]}
-                </span>
+                <span className="text-muted-foreground">proves: {ORIGIN_PROVES[test.origin]}</span>
               </div>
               <p
                 data-testid="origin-explanation"
@@ -318,10 +352,45 @@ function TestDetailPage() {
                 </>
               ) : (
                 <p className="text-sm text-muted-foreground">
-                  This test traces to no User Story. See Origin for what a passing run
-                  establishes.
+                  This test traces to no User Story. See Origin for what a passing run establishes.
                 </p>
               )}
+
+              <div className="space-y-1.5 border-t border-line pt-3">
+                <label
+                  htmlFor="test-story-link"
+                  className="font-mono text-[10px] tracking-wider text-dim uppercase"
+                >
+                  This test verifies
+                </label>
+                <select
+                  id="test-story-link"
+                  data-testid="test-story-link"
+                  value={test.userStoryId ?? ""}
+                  disabled={link.isPending}
+                  onChange={(event) => link.mutate(event.target.value || null)}
+                  className="w-full rounded-md bg-panel2 px-2.5 py-1.5 text-xs ring-1 ring-line outline-none focus:ring-primary/50"
+                >
+                  <option value="" className="bg-panel2">
+                    No requirement
+                  </option>
+                  {stories.map((item) => (
+                    <option key={item.id} value={item.id} className="bg-panel2">
+                      {item.id} — {item.title}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  A link is your claim, not a deduction. The requirement counts as covered only once
+                  every test linked to it passes — and, if it has scenarios, once each of them is
+                  exercised.
+                </p>
+                {gap ? (
+                  <p data-testid="coverage-gap" className="text-xs leading-relaxed text-skip">
+                    {gap}
+                  </p>
+                ) : null}
+              </div>
             </PanelBody>
           </Panel>
         </div>
@@ -365,4 +434,25 @@ function Artifact({ title, path }: { title: string; path: string | undefined }) 
       </PanelBody>
     </Panel>
   );
+}
+
+/** Why a linked requirement is still not covered, in the words of the rule that decides
+ *  it. Returns null when nothing stands in the way. */
+function coverageGap(story: UserStory | undefined, tests: PlaywrightTest[]): string | null {
+  if (!story || tests.length === 0) return null;
+
+  const failing = tests.filter((item) => item.status !== "passed");
+  if (failing.length > 0) {
+    return `${failing.length} of the ${tests.length} tests linked to ${story.id} ${
+      failing.length === 1 ? "has" : "have"
+    } not passed. The requirement stays uncovered until they all do.`;
+  }
+
+  const exercised = new Set(tests.map((item) => item.gherkinScenarioId).filter(Boolean));
+  const missing = story.gherkinScenarios.filter((item) => !exercised.has(item.id));
+  if (missing.length > 0) {
+    return `${missing.length} of the ${story.gherkinScenarios.length} scenarios of ${story.id} are not exercised by any test, so its criteria stay uncovered.`;
+  }
+
+  return null;
 }

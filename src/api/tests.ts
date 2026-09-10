@@ -1,9 +1,4 @@
-import type {
-  PlaywrightTest,
-  PlaywrightTestDetail,
-  TestOrigin,
-  TestStatus,
-} from "../types/models";
+import type { PlaywrightTest, PlaywrightTestDetail, TestOrigin, TestStatus } from "../types/models";
 import { clone, http, resolve } from "./client";
 import * as db from "./mock/data";
 
@@ -62,6 +57,24 @@ export const testsApi = {
       () =>
         http<{ jobId: string; status: string; progress: number }>(`/tests/${testId}/run`, {
           method: "POST",
+        }),
+    );
+  },
+
+  /** States that this test verifies that requirement. Nobody can infer it: an imported
+   *  test names a behaviour, not a story, so the link is a person's claim. */
+  linkToStory(testId: string, storyId: string | null): Promise<PlaywrightTest> {
+    return resolve(
+      async () => {
+        const test = db.tests.find((t) => t.id === testId);
+        if (!test) throw new Error(`Test ${testId} not found`);
+        test.userStoryId = storyId;
+        return clone(test);
+      },
+      () =>
+        http<PlaywrightTest>(`/tests/${testId}/story`, {
+          method: "PATCH",
+          body: JSON.stringify({ storyId }),
         }),
     );
   },
