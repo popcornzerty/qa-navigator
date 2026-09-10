@@ -92,7 +92,13 @@ GENERATED_MARKER = (
 
 RETRY_TEMPERATURE = 0.7
 
-GHERKIN_KEYWORDS = ("Étant donné", "Quand", "Alors")
+# The canonical Gherkin keywords, not their French translations. Gherkin does localise
+# them, but the step text is already French and the UI renders Given/When/Then: emitting
+# "Étant donné" in the spec while the scenario screen says "Given" left the same step
+# labelled two ways. English keywords with local-language steps is also what most tooling
+# expects to parse.
+GHERKIN_KEYWORDS = ("Given", "When", "Then")
+CONTINUATION_KEYWORD = "And"
 
 
 @dataclass
@@ -134,7 +140,7 @@ def flatten_steps(given: list[str], when: list[str], then: list[str]) -> list[tu
     steps: list[tuple[str, str]] = []
     for keyword, bucket in zip(GHERKIN_KEYWORDS, (given, when, then)):
         for index, text in enumerate(bucket):
-            steps.append((keyword if index == 0 else "Et", text))
+            steps.append((keyword if index == 0 else CONTINUATION_KEYWORD, text))
     return steps
 
 
@@ -360,7 +366,7 @@ def _build_prompt(
         "`page.goto(...)`, ni dans un `toHaveURL(...)`. Toute autre page contient un "
         "paramètre dans son URL et ne s'atteint qu'en naviguant depuis l'une d'elles.\n"
         f"Adresse d'accueil : {home}\n"
-        "Une étape « Étant donné » qui décrit un état de départ — « l'utilisateur est "
+        "Une étape « Given » qui décrit un état de départ — « l'utilisateur est "
         f"connecté », « sur la page d'accueil » — s'ouvre sur {home}, jamais sur la page "
         "que le scénario doit atteindre : partir de la destination ferait un test qui "
         "arrive là où il était déjà, et qui ne prouve rien.\n"

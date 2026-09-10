@@ -39,6 +39,12 @@ GHERKIN_OPENINGS = (
     "étant donné que ",
     "étant donné ",
     "alors ",
+    # The canonical keywords too: the model is prompted in French but echoes the ones it
+    # sees emitted, and a title opening on "Given" recites just as much as one on « Quand ».
+    "given ",
+    "when ",
+    "then ",
+    "and ",
 )
 # A rejected sample is retried by sampling wider, never by replaying the same mode.
 SCENARIO_RETRY_TEMPERATURE = 0.7

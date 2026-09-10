@@ -32,7 +32,7 @@ def _context(tmp_path: Path) -> generation.FeatureContext:
 
 def test_flatten_steps_uses_and_for_repeated_keywords():
     steps = playwright_gen.flatten_steps(["a", "b"], ["c"], ["d", "e"])
-    assert [keyword for keyword, _ in steps] == ["Étant donné", "Et", "Quand", "Alors", "Et"]
+    assert [keyword for keyword, _ in steps] == ["Given", "And", "When", "Then", "And"]
 
 
 def test_valid_playwright_line_is_accepted():
@@ -161,7 +161,7 @@ def test_step_indices_are_one_based(tmp_path: Path, monkeypatch):
         base_url="http://localhost:8080",
     )
 
-    first, rest = spec.source.split('await test.step("Quand', 1)
+    first, rest = spec.source.split('await test.step("When', 1)
     assert 'await page.goto("/cart");' in first, "step 1 code landed on the wrong step"
     assert "TODO manuel" in rest
 
