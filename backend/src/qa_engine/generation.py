@@ -15,6 +15,7 @@ enter the backlog: source files and confidence are copied from the feature, not 
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -26,6 +27,8 @@ logger = logging.getLogger(__name__)
 MAX_STORIES_PER_FEATURE = 3
 MAX_CRITERIA_PER_STORY = 4
 MAX_SCENARIOS_PER_STORY = 2
+# A rejected sample is retried by sampling wider, never by replaying the same mode.
+SCENARIO_RETRY_TEMPERATURE = 0.7
 MAX_EXCERPT_FILES = 2
 MAX_EXCERPT_CHARS = 1200
 
@@ -79,6 +82,19 @@ SCENARIO_SCHEMA = {
     },
     "required": ["scenarios"],
 }
+
+
+# What a Gherkin step must never contain. A scenario is read by whoever decides
+# whether the behaviour is the wanted one, and it is what gets pushed to Jira: a step
+# naming a route, a file or a selector cannot be judged by someone who does not read
+# the code, and ties the requirement to an implementation free to change beneath it.
+LEAKS = [
+    (re.compile(r"""\s/[a-zA-Z0-9_\-]+(?:/[a-zA-Z0-9_$\-]+)*"""), "un chemin de route"),
+    (re.compile(r"""\b[a-zA-Z0-9_\.-]+\.(?:tsx|ts|jsx|js|css|json)\b"""), "un nom de fichier"),
+    (re.compile(r"""\bdata-testid\b"""), "une ancre de test"),
+    (re.compile(r"""\b(?:localhost|https?://)[^\s]*"""), "une URL"),
+    (re.compile(r"""<[A-Za-z][\w.]*\s*/?>"""), "une balise"),
+]
 
 
 @dataclass
@@ -209,6 +225,34 @@ def generate_stories(context: FeatureContext) -> list[GeneratedStory]:
     return stories
 
 
+def technical_leak(step: str) -> str | None:
+    """Name the implementation detail a Gherkin step should not contain.
+
+    A scenario is read by whoever decides whether the behaviour is the wanted one, and it
+    is the artefact pushed to Jira. "L'API /auth/login est appelée" describes a call, not
+    a behaviour: it cannot be judged by someone who does not read the code, and it ties
+    the requirement to an implementation that may change without the behaviour changing.
+
+    The prompt already forbids this, and the model obeys most of the time. Most of the
+    time is not a guarantee, so the rule is checked.
+    """
+    for pattern, label in LEAKS:
+        found = pattern.search(step)
+        if found:
+            return f"{label} « {found.group(0).strip()} »"
+    return None
+
+
+def _clean_scenario(candidate: "GeneratedScenario") -> tuple[bool, str | None]:
+    """Whether a scenario is free of implementation detail, and what betrayed it."""
+    for bucket in (candidate.given, candidate.when, candidate.then):
+        for step in bucket:
+            leak = technical_leak(step)
+            if leak:
+                return False, leak
+    return True, None
+
+
 def generate_scenarios(context: FeatureContext, story: GeneratedStory) -> list[GeneratedScenario]:
     """Turn one story and its criteria into Gherkin scenarios."""
     criteria = "\n".join(f"- {item}" for item in story.acceptance_criteria) or "- (aucun)"
@@ -235,13 +279,36 @@ def generate_scenarios(context: FeatureContext, story: GeneratedStory) -> list[G
         "assertions : si tu enchaînes quatre clics puis quatre résultats, seul le dernier "
         "peut être vrai et le scénario devient impossible à satisfaire. Quatre pages à "
         "vérifier, ce sont quatre scénarios — ou un seul, sur une page représentative ;\n"
+        "- un « alors » décrit l'état **après toutes** les actions, jamais un état "
+        "intermédiaire. « Le formulaire est affiché » placé après l'envoi du formulaire "
+        "est faux : à ce moment-là le formulaire a disparu. Si tu as besoin d'observer "
+        "une étape intermédiaire, coupe le scénario en deux ;\n"
         "- chaque étape est une phrase courte à l'infinitif ou au présent, sans « je » ;\n"
         "- interdits : URL, chemin de route, sélecteur CSS, nom de composant, nom de "
         "fichier, titre d'onglet du navigateur. Désigne les écrans par leur nom métier "
         '(« la page de détail du projet », pas « /projects/$id »).'
     )
-    payload = ollama.chat_json(SYSTEM_PROMPT, prompt, SCENARIO_SCHEMA)
+    scenarios, leak = _collect_scenarios(prompt)
+    if leak:
+        # Dropping the scenario would lose a legitimate flow over one badly worded step.
+        # Sampled again, with the offence named, the model usually rewrites it in business
+        # terms — the same treatment a wholly unusable spec already gets.
+        logger.info("Regenerating scenarios: %s", leak)
+        scenarios, _ = _collect_scenarios(
+            f"{prompt}\n\nTa réponse précédente contenait {leak}, ce qui est interdit. "
+            "Récris les scénarios en ne décrivant que ce qu'un utilisateur voit à l'écran.",
+            temperature=SCENARIO_RETRY_TEMPERATURE,
+        )
+    return scenarios
 
+
+def _collect_scenarios(
+    prompt: str, temperature: float = 0.2
+) -> tuple[list[GeneratedScenario], str | None]:
+    """One sampling round: the usable scenarios, and the first leak that spoiled one."""
+    payload = ollama.chat_json(SYSTEM_PROMPT, prompt, SCENARIO_SCHEMA, temperature=temperature)
+
+    rejected: str | None = None
     scenarios: list[GeneratedScenario] = []
     seen: set[tuple[str, ...]] = set()
     for raw in payload.get("scenarios", [])[:MAX_SCENARIOS_PER_STORY]:
@@ -260,9 +327,15 @@ def generate_scenarios(context: FeatureContext, story: GeneratedStory) -> list[G
         if fingerprint in seen:
             logger.info("Dropping duplicate scenario %r", name)
             continue
+        acceptable, leak = _clean_scenario(candidate)
+        if not acceptable:
+            logger.info("Dropping scenario %r: %s", name, leak)
+            rejected = rejected or leak
+            continue
+
         seen.add(fingerprint)
         scenarios.append(candidate)
-    return scenarios
+    return scenarios, rejected
 
 
 def _fingerprint(scenario: GeneratedScenario) -> tuple[str, ...]:

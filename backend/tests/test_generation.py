@@ -290,3 +290,94 @@ def test_the_scenario_prompt_forbids_batching_behaviours(monkeypatch):
     )
 
     assert "un scénario = un comportement" in captured[0]
+
+
+class TestGherkinStaysBusinessReadable:
+    """A scenario is judged by whoever decides the behaviour is wanted, and pushed to Jira."""
+
+    def test_a_route_in_a_step_is_a_leak(self):
+        assert generation.technical_leak(
+            "L'API /auth/login est appelée avec les identifiants entrés"
+        )
+
+    def test_a_file_name_is_a_leak(self):
+        assert generation.technical_leak("Le composant Legal.tsx affiche les documents")
+
+    def test_a_url_is_a_leak(self):
+        assert generation.technical_leak("La page s'ouvre sur http://localhost:5180/#cgu")
+
+    def test_a_test_anchor_is_a_leak(self):
+        assert generation.technical_leak("Le data-testid nav-cgu est présent")
+
+    def test_a_business_step_is_not(self):
+        for step in (
+            "L'utilisateur est redirigé vers la page d'administration",
+            "Le formulaire de connexion est affiché",
+            "Le bouton « Analyser » est visible",
+        ):
+            assert generation.technical_leak(step) is None, step
+
+
+def test_a_leaking_scenario_is_regenerated_rather_than_dropped(monkeypatch):
+    """Dropping it would lose a legitimate flow over one badly worded step."""
+    calls: list[float] = []
+
+    def answer(_system, prompt, _schema, *, temperature=0.2):
+        calls.append(temperature)
+        if len(calls) == 1:
+            return {
+                "scenarios": [
+                    {
+                        "scenario": "Connexion",
+                        "etant_donne": ["l'utilisateur est sur la page d'accueil"],
+                        "quand": ["il valide le formulaire"],
+                        "alors": ["L'API /auth/login est appelée"],
+                    }
+                ]
+            }
+        assert "interdit" in prompt, "the retry must name the offence, not replay blindly"
+        return {
+            "scenarios": [
+                {
+                    "scenario": "Connexion",
+                    "etant_donne": ["l'utilisateur est sur la page d'accueil"],
+                    "quand": ["il valide le formulaire"],
+                    "alors": ["Le tableau de bord est affiché"],
+                }
+            ]
+        }
+
+    monkeypatch.setattr(generation.ollama, "chat_json", answer)
+
+    context = generation.FeatureContext(
+        name="F", description="", routes=["/"], components=[], api_calls=[],
+        test_ids=[], controls=[], has_form=False, source_files=[],
+    )
+    scenarios = generation.generate_scenarios(
+        context,
+        generation.GeneratedStory(title="T", description="d", epic="e", acceptance_criteria=["c"]),
+    )
+
+    assert calls == [0.2, generation.SCENARIO_RETRY_TEMPERATURE]
+    assert [s.then for s in scenarios] == [["Le tableau de bord est affiché"]]
+
+
+def test_the_prompt_forbids_asserting_an_intermediate_state(monkeypatch):
+    """"Le formulaire est affiché" after submitting it is false: the form is gone."""
+    captured: list[str] = []
+
+    def capture(_system, prompt, _schema, **kwargs):
+        captured.append(prompt)
+        return {"scenarios": []}
+
+    monkeypatch.setattr(generation.ollama, "chat_json", capture)
+
+    context = generation.FeatureContext(
+        name="F", description="", routes=["/"], components=[], api_calls=[],
+        test_ids=[], controls=[], has_form=False, source_files=[],
+    )
+    generation.generate_scenarios(
+        context,
+        generation.GeneratedStory(title="T", description="d", epic="e", acceptance_criteria=["c"]),
+    )
+    assert "après toutes" in captured[0]
