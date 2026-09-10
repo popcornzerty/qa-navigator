@@ -30,6 +30,16 @@ MAX_SCENARIOS_PER_STORY = 2
 # A scenario title is scanned down a backlog and becomes a Jira summary: it names the
 # scenario, it does not recite it.
 MAX_TITLE_CHARS = 80
+# Words that start a Gherkin step. In a title they mark where the name stops and the
+# recitation begins.
+GHERKIN_OPENINGS = (
+    "quand ",
+    "lorsque ",
+    "si ",
+    "étant donné que ",
+    "étant donné ",
+    "alors ",
+)
 # A rejected sample is retried by sampling wider, never by replaying the same mode.
 SCENARIO_RETRY_TEMPERATURE = 0.7
 MAX_EXCERPT_FILES = 2
@@ -261,13 +271,24 @@ def tidy_title(title: str) -> str:
     """
     cleaned = " ".join(title.split()).rstrip(".")
     lowered = cleaned.lower()
-    for keyword in ("quand ", "lorsque ", "si ", "étant donné que ", "étant donné ", "alors "):
+    for keyword in GHERKIN_OPENINGS:
         if lowered.startswith(keyword):
             cleaned = cleaned[len(keyword):]
             # What follows the keyword is the action; the clause after the comma is its
             # result, already stated by the steps.
             cleaned = cleaned.split(",")[0].strip()
             break
+
+    # A keyword can also appear part-way through, when a good name is followed by the
+    # steps themselves: "Ouvrir le formulaire de connexion Étant donné que…". The name is
+    # what precedes it.
+    lowered = cleaned.lower()
+    cut = min(
+        (position for position in (lowered.find(f" {word}") for word in GHERKIN_OPENINGS) if position > 0),
+        default=-1,
+    )
+    if cut > 0:
+        cleaned = cleaned[:cut].rstrip(" ,;:—-")
 
     if len(cleaned) > MAX_TITLE_CHARS:
         cut = cleaned.rfind(" ", 0, MAX_TITLE_CHARS)

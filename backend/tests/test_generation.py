@@ -436,3 +436,22 @@ class TestScenarioTitles:
         )
         assert calls == [0.2], "a title is repaired, never retried"
         assert [s.scenario for s in scenarios] == ["Il clique"]
+
+
+def test_a_name_followed_by_its_steps_keeps_only_the_name():
+    """The model produced a good name and then recited the scenario after it.
+
+    Cutting on length alone left "Ouvrir le formulaire de connexion Étant donné que
+    l'utilisateur est sur la page" — a name spoiled by half a step.
+    """
+    assert generation.tidy_title(
+        "Ouvrir le formulaire de connexion Étant donné que l'utilisateur est sur la page d'accueil"
+    ) == "Ouvrir le formulaire de connexion"
+    assert generation.tidy_title(
+        "Se connecter avec des identifiants valides Étant donné que le formulaire est affiché"
+    ) == "Se connecter avec des identifiants valides"
+
+
+def test_a_keyword_inside_an_ordinary_word_is_not_a_cut():
+    """"Alors" as a word, not "alorsque" or a name containing it."""
+    assert generation.tidy_title("Consulter les alertes") == "Consulter les alertes"
