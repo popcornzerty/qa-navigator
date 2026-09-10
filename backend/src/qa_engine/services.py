@@ -456,7 +456,11 @@ def run_analysis(analysis_id: str) -> None:
 
         counts = Counter(symbol.kind for symbol in symbols)
         writer.start("routes")
-        writer.complete("routes", f"{counts['route']} routes détectées")
+        # Distinct addresses, not occurrences: the same `#cgu` declared in the menu and on
+        # the login screen is one page, and reporting eight of them for an application
+        # with four invites the reader to think the analysis found more than it did.
+        addresses = {symbol.name for symbol in symbols if symbol.kind == "route"}
+        writer.complete("routes", f"{len(addresses)} routes détectées")
         writer.start("components")
         writer.complete("components", f"{counts['component']} composants indexés")
         writer.start("apis")

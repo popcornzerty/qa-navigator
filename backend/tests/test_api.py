@@ -377,3 +377,21 @@ def test_a_run_interrupted_by_a_restart_is_released(tmp_path: Path):
         assert db.get(PlaywrightTest, "pw-stuck").test_status == "not_run"
     finally:
         db.close()
+
+
+def test_the_routes_step_counts_addresses_not_occurrences(tmp_path: Path):
+    """The same address declared on two screens is one page, not two."""
+    repo = tmp_path / "hash-app"
+    (repo / "src").mkdir(parents=True)
+    for name in ("Menu.tsx", "Login.tsx"):
+        (repo / "src" / name).write_text(
+            'export const Panel = () => <nav><a href="#cgu">CGU</a></nav>;',
+            encoding="utf-8",
+        )
+
+    with TestClient(app) as client:
+        project_id = _create_project(client, repo, "Hash app")
+        job = client.post(f"{PREFIX}/analyses", json={"project_id": project_id}).json()
+        steps = client.get(f"{PREFIX}/jobs/{job['jobId']}").json()["steps"]
+        detail = next(step["detail"] for step in steps if step["key"] == "routes")
+        assert detail.startswith("1 route"), detail
