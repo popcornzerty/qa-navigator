@@ -145,6 +145,10 @@ GOTO_CALL = re.compile(r"\bpage\.goto\(\s*['\"`]([^'\"`]+)['\"`]")
 # which never existed, and blames the application for it.
 URL_ASSERTION = re.compile(r"\btoHaveURL\(\s*['\"`]([^'\"`]+)['\"`]")
 
+# Anything that can change the address between two assertions. `goto` is included:
+# navigating explicitly is as good a reason for the address to differ as a click.
+ACTION_CALL = re.compile(r"""\b(?:goto|click|press|fill|selectOption|check|uncheck|setInputFiles|tap)\s*""")
+
 
 def normalise_route(value: str) -> str:
     """Address of a URL, without origin, query or trailing slash.
@@ -359,6 +363,37 @@ def _build_prompt(
     )
 
 
+def contradictory_url_assertions(lines: list[str]) -> list[str]:
+    """Report assertions that cannot all hold, because a page has one address at a time.
+
+    Gherkin puts every action before every assertion, so a scenario covering four
+    behaviours at once produces four clicks followed by four `toHaveURL`, each naming a
+    different page. Only the last can be true; the test is unsatisfiable whatever the
+    application does, and reports the product broken for a fault in the scenario.
+
+    Two different addresses asserted with no navigation between them is the contradiction.
+    Asserting, navigating, then asserting again is perfectly ordinary and is left alone.
+    """
+    problems: list[str] = []
+    previous: str | None = None
+    for line in lines:
+        if ACTION_CALL.search(line):
+            previous = None
+            continue
+        asserted = URL_ASSERTION.search(line)
+        if not asserted:
+            continue
+        target = normalise_route(asserted.group(1))
+        if previous is not None and target != previous:
+            problems.append(
+                f"« {previous} » et « {target} » sont affirmées sans navigation entre "
+                "elles : le scénario réunit plusieurs comportements et ne peut pas être "
+                "vrai en entier. Découpez-le en un scénario par page."
+            )
+        previous = target
+    return problems
+
+
 def _render_steps(
     steps: list[tuple[str, str]],
     known_test_ids: set[str],
@@ -410,6 +445,8 @@ def _render_steps(
 
         body.extend(f"      {line}" for line in accepted)
         body.append("    });")
+
+    unresolved.extend(contradictory_url_assertions(body))
     return body, unresolved
 
 

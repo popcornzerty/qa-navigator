@@ -665,3 +665,48 @@ class TestRoleIsCheckedAgainstTheCode:
             "await page.getByRole('link', { name: 'À propos' }).click();", set(), None, []
         )
         assert accepted is not None
+
+
+class TestUnsatisfiableScenarios:
+    """Gherkin puts every action before every assertion, which lets a scenario covering
+    several behaviours assert several addresses at once. Only the last can hold."""
+
+    def check(self, *lines: str) -> list[str]:
+        return playwright_gen.contradictory_url_assertions(list(lines))
+
+    def test_two_addresses_asserted_in_a_row_is_impossible(self):
+        problems = self.check(
+            "await expect(page).toHaveURL('http://x/#a-propos');",
+            "await expect(page).toHaveURL('http://x/#cgu');",
+        )
+        assert len(problems) == 1
+        assert "#a-propos" in problems[0] and "#cgu" in problems[0]
+
+    def test_asserting_navigating_then_asserting_again_is_ordinary(self):
+        assert self.check(
+            "await expect(page).toHaveURL('#a-propos');",
+            "await page.getByRole('link', { name: 'CGU' }).click();",
+            "await expect(page).toHaveURL('#cgu');",
+        ) == []
+
+    def test_the_same_address_twice_is_not_a_contradiction(self):
+        assert self.check(
+            "await expect(page).toHaveURL('http://x/#cgu');",
+            "await expect(page).toHaveURL('#cgu');",
+        ) == []
+
+    def test_a_goto_counts_as_navigation(self):
+        assert self.check(
+            "await expect(page).toHaveURL('#a-propos');",
+            "await page.goto('http://x/#cgu');",
+            "await expect(page).toHaveURL('#cgu');",
+        ) == []
+
+    def test_the_four_page_scenario_is_reported(self):
+        """The real case: four clicks, then four addresses that exclude one another."""
+        body = ["await page.goto('http://x/#a-propos');"]
+        for name in ("À propos", "CGU", "Confidentialité", "Mentions légales"):
+            body.append(f"await page.getByRole('link', {{ name: '{name}' }}).click();")
+        for target in ("#a-propos", "#cgu", "#confidentialite", "#mentions-legales"):
+            body.append(f"await expect(page).toHaveURL('http://x/{target}');")
+        assert len(self.check(*body)) == 3

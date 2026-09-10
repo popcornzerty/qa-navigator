@@ -257,3 +257,36 @@ def select_feature(model, project_id):
     from sqlalchemy import select
 
     return select(model).where(model.project_id == project_id)
+
+
+def test_the_scenario_prompt_forbids_batching_behaviours(monkeypatch):
+    """Four clicks then four addresses is unsatisfiable, and the model has to be told.
+
+    Gherkin puts every action before every assertion, so a scenario covering several
+    behaviours asserts several mutually exclusive states and can never be entirely true.
+    """
+    captured: list[str] = []
+
+    def capture(_system, prompt, _schema, **kwargs):
+        captured.append(prompt)
+        return {"scenarios": []}
+
+    monkeypatch.setattr(generation.ollama, "chat_json", capture)
+
+    context = generation.FeatureContext(
+        name="Frontend",
+        description="",
+        routes=["/"],
+        components=[],
+        api_calls=[],
+        test_ids=[],
+        controls=[],
+        has_form=False,
+        source_files=[],
+    )
+    generation.generate_scenarios(
+        context,
+        generation.GeneratedStory(title="T", description="d", epic="e", acceptance_criteria=["c"]),
+    )
+
+    assert "un scénario = un comportement" in captured[0]
