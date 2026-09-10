@@ -173,7 +173,9 @@ def test_discovered_tests_do_not_inflate_story_coverage(tmp_path: Path):
         assert report["automation"]["total"] == 2
         # ...but they prove nothing about a stated requirement.
         assert report["userStories"]["automated"] == 0
-        assert report["coverage"] == 0.0
+        # And with no owned requirement, there is no ratio to report at all.
+        assert report["coverage"] is None
+        assert report["baseline"] == "none"
 
 
 def test_regenerating_a_hand_written_test_is_refused(tmp_path: Path):

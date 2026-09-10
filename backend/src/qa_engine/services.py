@@ -910,6 +910,32 @@ def queue_run(db: Session, test: PlaywrightTest) -> TestRun:
     return run
 
 
+def _refresh_story_coverage(db: Session, story_id: str) -> None:
+    """Mark a story's criteria covered only when every scenario of it passes.
+
+    One passing test used to mark them all: US-004 read 4/4 on the strength of a single
+    scenario about one of its four pages. The numerator lied as much as the denominator
+    did, and in the same direction.
+
+    A criterion is still not individually traced — nothing links one to a scenario — so
+    what this states is weaker and true: every scenario derived from this story runs
+    green. A story with no scenario, or one still to run, covers nothing.
+    """
+    story = db.get(UserStory, story_id)
+    if not story:
+        return
+
+    tests = list(db.scalars(select(PlaywrightTest).where(PlaywrightTest.user_story_id == story_id)))
+    scenario_ids = {scenario.id for scenario in story.gherkin_scenarios}
+    tested = {test.gherkin_scenario_id for test in tests if test.gherkin_scenario_id}
+
+    verified = bool(scenario_ids) and scenario_ids <= tested and all(
+        test.test_status == "passed" for test in tests if test.gherkin_scenario_id
+    )
+    for criterion in story.acceptance_criteria:
+        criterion.covered = verified
+
+
 def run_playwright_test(run_id: str) -> None:
     """Execute the test behind one run, streaming its output into it."""
     db = SessionLocal()
@@ -1000,11 +1026,8 @@ def run_playwright_test(run_id: str) -> None:
         # A passing scenario is covered: reflect it on its acceptance criteria. A
         # discovered test has no story, so it proves nothing about a stated requirement —
         # counting it as coverage would inflate the figure this product exists to keep honest.
-        if outcome.status == "passed" and test.user_story_id:
-            story = db.get(UserStory, test.user_story_id)
-            if story:
-                for criterion in story.acceptance_criteria:
-                    criterion.covered = True
+        if test.user_story_id:
+            _refresh_story_coverage(db, test.user_story_id)
         db.commit()
         logger.info("Test %s finished: %s in %dms", test_id, outcome.status, outcome.duration_ms)
     except Exception:

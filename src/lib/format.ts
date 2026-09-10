@@ -38,8 +38,13 @@ export function formatConfidence(value: number): string {
   return value.toFixed(2);
 }
 
-export function percent(value: number): string {
-  return `${value.toFixed(1)}%`;
+/** A percentage, or an em dash when there is nothing to divide by.
+ *
+ *  Coverage is null when no requirement has been claimed yet. Rendering that as "0.0%"
+ *  says the product is untested when the truth is that nothing has been asserted about
+ *  it — the opposite of a useful signal, and the reading a team would act on. */
+export function percent(value: number | null | undefined): string {
+  return value === null || value === undefined ? "—" : `${value.toFixed(1)}%`;
 }
 
 const LABELS: Record<string, string> = {

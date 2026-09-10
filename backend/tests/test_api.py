@@ -124,7 +124,10 @@ def test_empty_collections_match_the_frontend_contract(tmp_path: Path):
 
         coverage = client.get(f"{PREFIX}/coverage?project_id={project_id}").json()
         assert coverage["userStories"] == {"total": 0, "withGherkin": 0, "automated": 0}
-        assert coverage["coverage"] == 0
+        # Not 0: nothing has been claimed yet, which is the opposite of
+        # "nothing is tested". A ratio needs a denominator someone owns.
+        assert coverage["coverage"] is None
+        assert coverage["baseline"] == "none"
 
         dashboard = client.get(f"{PREFIX}/dashboard?project_id={project_id}").json()
         assert dashboard["userStories"] == 0
@@ -395,3 +398,132 @@ def test_the_routes_step_counts_addresses_not_occurrences(tmp_path: Path):
         steps = client.get(f"{PREFIX}/jobs/{job['jobId']}").json()["steps"]
         detail = next(step["detail"] for step in steps if step["key"] == "routes")
         assert detail.startswith("1 route"), detail
+
+
+def test_coverage_is_measured_against_requirements_a_person_owns(tmp_path: Path):
+    """Measured against unreviewed drafts, the figure tracked the model's verbosity.
+
+    On an unchanged product with unchanged tests it fell from 30.8% to 11.4% because a
+    generation run wrote more criteria — so the denominator has to be something the team
+    stands behind, not something a model just proposed.
+    """
+    from qa_engine.database import SessionLocal
+    from qa_engine.models import AcceptanceCriterion, UserStory
+
+    repo = _repository(tmp_path, "owned-coverage")
+    with TestClient(app) as client:
+        project_id = _create_project(client, repo, "Owned coverage")
+
+        db = SessionLocal()
+        try:
+            for index, (origin, status, covered) in enumerate(
+                [("jira", "created", True), ("generated", "draft", False)], start=1
+            ):
+                story = UserStory(
+                    id=f"US-OWN-{index}",
+                    project_id=project_id,
+                    title=f"Story {index}",
+                    origin=origin,
+                    story_status=status,
+                )
+                db.add(story)
+                db.flush()
+                db.add(
+                    AcceptanceCriterion(
+                        id=f"{story.id}-AC-01",
+                        user_story_id=story.id,
+                        text="un critère",
+                        covered=covered,
+                    )
+                )
+            db.commit()
+        finally:
+            db.close()
+
+        report = client.get(f"{PREFIX}/coverage?project_id={project_id}").json()
+        # The Jira story's criterion is covered; the draft's is not and does not count.
+        assert report["coverage"] == 100.0
+        assert report["baseline"] == "owned"
+        assert report["draftCoverage"] == 0.0
+        # Both are still reported as criteria: hiding the drafts would be its own lie.
+        assert report["acceptanceCriteria"]["total"] == 2
+
+
+def test_one_passing_scenario_does_not_cover_a_whole_story(tmp_path: Path):
+    """US-004 read 4/4 on the strength of a single scenario about one of its four pages.
+
+    Nothing links a criterion to a scenario, so the weaker claim is the true one: a story
+    is verified when every scenario derived from it runs green, and not before.
+    """
+    from qa_engine.database import SessionLocal
+    from qa_engine.models import AcceptanceCriterion, GherkinScenario, PlaywrightTest, UserStory
+    from qa_engine.services import _refresh_story_coverage
+
+    repo = _repository(tmp_path, "partial-coverage")
+    with TestClient(app) as client:
+        project_id = _create_project(client, repo, "Partial coverage")
+
+    db = SessionLocal()
+    try:
+        story = UserStory(id="US-PART", project_id=project_id, title="Deux chemins")
+        db.add(story)
+        db.flush()
+        db.add(
+            AcceptanceCriterion(
+                id="US-PART-AC-01", user_story_id=story.id, text="un critère", covered=False
+            )
+        )
+        for index in (1, 2):
+            db.add(
+                GherkinScenario(
+                    id=f"US-PART-SC-{index}",
+                    user_story_id=story.id,
+                    project_id=project_id,
+                    feature="Domaine",
+                    scenario=f"Scénario {index}",
+                )
+            )
+        # Only the first scenario has a test, and it passes.
+        db.add(
+            PlaywrightTest(
+                id="pw-part",
+                project_id=project_id,
+                user_story_id=story.id,
+                gherkin_scenario_id="US-PART-SC-1",
+                file="tests/a.spec.ts",
+                test_status="passed",
+            )
+        )
+        db.commit()
+
+        _refresh_story_coverage(db, "US-PART")
+        db.commit()
+        db.expire_all()
+        assert db.get(AcceptanceCriterion, "US-PART-AC-01").covered is False
+
+        # Automate the second scenario too, and the story is verified.
+        db.add(
+            PlaywrightTest(
+                id="pw-part-2",
+                project_id=project_id,
+                user_story_id=story.id,
+                gherkin_scenario_id="US-PART-SC-2",
+                file="tests/b.spec.ts",
+                test_status="passed",
+            )
+        )
+        db.commit()
+        _refresh_story_coverage(db, "US-PART")
+        db.commit()
+        db.expire_all()
+        assert db.get(AcceptanceCriterion, "US-PART-AC-01").covered is True
+
+        # One of them regresses and the story stops being verified.
+        db.get(PlaywrightTest, "pw-part-2").test_status = "failed"
+        db.commit()
+        _refresh_story_coverage(db, "US-PART")
+        db.commit()
+        db.expire_all()
+        assert db.get(AcceptanceCriterion, "US-PART-AC-01").covered is False
+    finally:
+        db.close()

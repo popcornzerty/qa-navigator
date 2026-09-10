@@ -27,8 +27,22 @@ function buildReport(projectId?: string): CoverageReport {
     )
     .slice(0, 12);
 
+  const owned = stories.filter(
+    (story) => story.status === "approved" || story.status === "created" || story.jiraKey,
+  );
+  const ownedCriteria = owned.flatMap((story) => story.acceptanceCriteria);
+  const ratio = (items: { covered: boolean }[]) =>
+    items.length === 0 ? null : Number(((items.filter((i) => i.covered).length / items.length) * 100).toFixed(1));
+
   return {
     projectId: projectId ?? "all",
+    draftCoverage: ratio(
+      stories.filter((s) => !owned.includes(s)).flatMap((s) => s.acceptanceCriteria),
+    ),
+    baseline: ownedCriteria.length > 0 ? ("owned" as const) : ("none" as const),
+    verifiedBehaviours: db.tests.filter(
+      (t) => t.origin === "discovered" && t.status === "passed",
+    ).length,
     userStories: {
       total: stories.length,
       withGherkin: stories.filter((s) => s.gherkinScenarios.length > 0).length,

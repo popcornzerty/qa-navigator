@@ -31,6 +31,32 @@ def _tests(db: Session, project_id: str | None) -> list[models.PlaywrightTest]:
     return list(db.scalars(statement))
 
 
+# A requirement someone owns: imported from a tracker, written by hand, or generated and
+# then approved by a person. An untouched draft is a proposal, not a requirement.
+OWNED_ORIGINS = {"jira", "manual"}
+OWNED_STATUSES = {"approved", "created", "out_of_sync"}
+
+
+def is_owned(story: models.UserStory) -> bool:
+    """Whether a story is a requirement a person stands behind.
+
+    Coverage measured against unreviewed drafts is not a measure of the product: it moved
+    from 30.8% to 11.4% on an unchanged product with unchanged tests, because a generation
+    run wrote more criteria. The denominator has to be something the team owns, or the
+    number tracks the model's verbosity instead of the risk.
+    """
+    return story.origin in OWNED_ORIGINS or story.story_status in OWNED_STATUSES
+
+
+def _ratio(covered: int, total: int) -> float | None:
+    """A percentage, or None when there is nothing to divide by.
+
+    Reporting 0% for an empty baseline reads as "nothing is tested" when the truth is
+    "nothing has been claimed yet" — the opposite of a useful signal.
+    """
+    return round(covered / total * 100, 1) if total else None
+
+
 def coverage_report(db: Session, project_id: str | None) -> schemas.CoverageReportRead:
     stories = _stories(db, project_id)
     tests = _tests(db, project_id)
@@ -38,6 +64,14 @@ def coverage_report(db: Session, project_id: str | None) -> schemas.CoverageRepo
     scenarios = [scenario for story in stories for scenario in story.gherkin_scenarios]
     criteria = [item for story in stories for item in story.acceptance_criteria]
     covered = [item for item in criteria if item.covered]
+
+    owned = [story for story in stories if is_owned(story)]
+    owned_criteria = [item for story in owned for item in story.acceptance_criteria]
+    owned_covered = [item for item in owned_criteria if item.covered]
+
+    drafts = [story for story in stories if not is_owned(story)]
+    draft_criteria = [item for story in drafts for item in story.acceptance_criteria]
+    draft_covered = [item for item in draft_criteria if item.covered]
     # Discovered tests carry no story, so they automate none. Their `None` would sit in
     # this set harmlessly, but leaving it there invites a later reader to assume the set
     # is a story index. `automation` below still counts them: they are real automation.
@@ -87,8 +121,12 @@ def coverage_report(db: Session, project_id: str | None) -> schemas.CoverageRepo
             total=len(tests),
             passing=sum(1 for test in tests if test.test_status == "passed"),
         ),
-        coverage=(
-            0.0 if not criteria else round(len(covered) / len(criteria) * 100, 1)
+        coverage=_ratio(len(owned_covered), len(owned_criteria)),
+        draft_coverage=_ratio(len(draft_covered), len(draft_criteria)),
+        baseline="owned" if owned_criteria else "none",
+        # A discovered test proves a behaviour without tracing to a stated requirement.
+        verified_behaviours=sum(
+            1 for test in tests if test.origin == "discovered" and test.test_status == "passed"
         ),
         gaps=gaps[:MAX_GAPS],
     )

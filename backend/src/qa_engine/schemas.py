@@ -78,7 +78,7 @@ class ProjectStatsRead(Wire):
     user_stories: int = 0
     gherkin_scenarios: int = 0
     playwright_tests: int = 0
-    coverage: float = 0
+    coverage: float | None = 0
 
 
 class GithubSettings(Wire):
@@ -366,7 +366,18 @@ class CoverageReportRead(Wire):
     acceptance_criteria: CriteriaCoverage
     gherkin: GherkinCoverage
     automation: AutomationCoverage
-    coverage: float
+    # Criteria of requirements a person owns — imported from Jira, or generated and then
+    # approved. This is the only ratio worth reporting as coverage: measured against
+    # unreviewed drafts instead, the figure moved from 30.8% to 11.4% on an unchanged
+    # product, purely because the model wrote more criteria that run.
+    coverage: float | None
+    # What the drafts would give, kept apart and never presented as coverage.
+    draft_coverage: float | None
+    baseline: Literal["owned", "none"]
+    # Passing tests written against the product directly. They prove a behaviour holds
+    # without tracing to any stated requirement, and counting them as coverage would be
+    # as wrong as ignoring what they establish.
+    verified_behaviours: int
     gaps: list[CoverageGapRead]
 
 
@@ -386,7 +397,9 @@ class DashboardSummaryRead(Wire):
     valid_gherkin: int
     automated_tests: int
     failing_tests: int
-    coverage: float
+    # None when no requirement has been claimed yet — which is not the same as
+    # nothing being tested, and must not be shown as 0%.
+    coverage: float | None
     activity: list[ActivityEventRead]
 
 

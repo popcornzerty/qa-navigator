@@ -28,7 +28,8 @@ export interface ProjectStats {
   userStories: number;
   gherkinScenarios: number;
   playwrightTests: number;
-  coverage: number;
+  /** Null when no requirement has been claimed yet — never render that as 0%. */
+  coverage: number | null;
 }
 
 export type FeatureStatus = "detected" | "confirmed" | "ignored";
@@ -211,7 +212,17 @@ export interface CoverageReport {
   acceptanceCriteria: { total: number; covered: number };
   gherkin: { total: number; valid: number };
   automation: { total: number; passing: number };
-  coverage: number;
+  /** Criteria of requirements a person owns — imported from Jira, or generated then
+   *  approved. Null when none has been claimed, which is not the same as nothing being
+   *  tested and must never render as 0%. */
+  coverage: number | null;
+  /** What the unreviewed drafts would give. Kept apart: measured against them, the figure
+   *  fell from 30.8% to 11.4% on an unchanged product because a run wrote more criteria. */
+  draftCoverage: number | null;
+  baseline: "owned" | "none";
+  /** Passing tests written against the product directly, proving a behaviour that traces
+   *  to no stated requirement. */
+  verifiedBehaviours: number;
   gaps: CoverageGap[];
 }
 
@@ -233,7 +244,8 @@ export interface DashboardSummary {
   validGherkin: number;
   automatedTests: number;
   failingTests: number;
-  coverage: number;
+  /** Null when no requirement has been claimed yet — never render that as 0%. */
+  coverage: number | null;
   activity: ActivityEvent[];
 }
 

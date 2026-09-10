@@ -108,26 +108,57 @@ function CoveragePage() {
           testId="metric-coverage"
           label="Coverage"
           value={percent(report.coverage)}
-          hint="acceptance criteria covered"
-          progress={report.coverage}
+          hint={
+            report.baseline === "owned"
+              ? "criteria of approved requirements"
+              : "no approved requirement yet"
+          }
+          {...(report.coverage === null ? {} : { progress: report.coverage })}
         />
       </div>
 
-      {/* These two figures sit side by side and count different things. Left unsaid, a
-          large test count reads as coverage — and tests imported from the repository or
-          generated from the code cover no stated requirement at all. */}
-      <p data-testid="coverage-caveat" className="text-xs text-muted-foreground">
-        <span className="text-foreground">Automated tests</span> counts every test, whatever
-        its origin. <span className="text-foreground">Coverage</span> counts only acceptance
-        criteria proven by a test traced to a User Story — an imported test, or one generated
-        from the code, adds to the first and not to the second.
+      {/* Measured against unreviewed drafts, this figure fell from 30.8% to 11.4% on an
+          unchanged product with unchanged tests, because a generation run wrote more
+          criteria. A ratio whose denominator a model can grow is not a measure of the
+          product, so the denominator is what the team owns. */}
+      <p data-testid="coverage-caveat" className="text-xs leading-relaxed text-muted-foreground">
+        {report.baseline === "owned" ? (
+          <>
+            <span className="text-foreground">Coverage</span> counts only the acceptance
+            criteria of requirements a person owns — imported from Jira, or generated and
+            then approved. Criteria of unreviewed drafts are excluded on purpose: a
+            denominator a model can grow measures its verbosity, not your product.
+          </>
+        ) : (
+          <>
+            <span className="text-foreground">No approved requirement yet</span>, so there is
+            no coverage ratio to report — which is not the same as nothing being tested.
+            Approve a generated story, or import one from Jira, and it becomes the baseline.
+          </>
+        )}{" "}
+        <span className="text-foreground">Automated tests</span> counts every test whatever
+        its origin, including the{" "}
+        <span className="text-foreground">{report.verifiedBehaviours} verified behaviours</span>{" "}
+        proven by passing tests that trace to no requirement.
+        {report.draftCoverage === null ? null : (
+          <> Drafts would give {percent(report.draftCoverage)}, shown here and counted nowhere.</>
+        )}
       </p>
 
       <div className="grid gap-5 lg:grid-cols-3">
         <Panel>
-          <PanelHeader title="Overall coverage" meta="acceptance criteria" />
+          <PanelHeader
+            title="Overall coverage"
+            meta={report.baseline === "owned" ? "approved requirements" : "no baseline"}
+          />
           <PanelBody className="grid place-items-center py-6">
-            <Donut value={report.coverage} />
+            {report.coverage === null ? (
+              <p className="max-w-56 text-center text-sm text-muted-foreground">
+                Nothing has been claimed yet, so there is nothing to measure against.
+              </p>
+            ) : (
+              <Donut value={report.coverage} />
+            )}
           </PanelBody>
         </Panel>
 
