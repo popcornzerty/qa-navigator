@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from itertools import chain
 from pathlib import Path
 
+from qa_engine import literals
 from qa_engine.repositories import LocalRepositoryProvider, RepositoryFile
 
 # --- Routing -------------------------------------------------------------------------
@@ -96,12 +97,16 @@ TESTID_PROPERTY = re.compile(r"\btest[iI][dD]\s*[:=]\s*(['\"])(?P<value>[^'\"]+)
 # the element is a `<button>`, and Playwright waits the full timeout before saying so.
 # Only literal labels are read — `<button>{item.label}</button>` says nothing about the
 # text a user sees, and guessing it is how a test comes to look for something imaginary.
+# JSX attributes can hold a brace expression containing `>`: `onClick={() => f(x)}`.
+# Stopping at the first `>` cut the tag in half and lost every control with a handler.
+JSX_ATTRIBUTES = r"(?P<attrs>(?:[^>{]|\{(?:[^{}]|\{[^{}]*\})*\})*)"
+
 LABELLED_CONTROL = re.compile(
-    r"<(?P<tag>button|a)\b(?P<attrs>[^>]*)>\s*(?P<label>[^<>{}]+?)\s*</(?P=tag)>",
+    r"<(?P<tag>button|a)\b" + JSX_ATTRIBUTES + r">\s*(?P<label>[^<>{}]+?)\s*</(?P=tag)>",
     re.DOTALL,
 )
 ARIA_LABEL = re.compile(
-    r"<(?P<tag>[a-z][\w-]*)\b(?P<attrs>[^>]*?\baria-label\s*=\s*[\"']"
+    r"<(?P<tag>[a-z][\w-]*)\b(?P<attrs>(?:[^>{]|\{(?:[^{}]|\{[^{}]*\})*\})*?\baria-label\s*=\s*[\"']"
     r"(?P<label>[^\"']+)[\"'][^>]*)>"
 )
 EXPLICIT_ROLE = re.compile(r"\brole\s*=\s*[\"'](?P<value>[^\"']+)[\"']")
@@ -180,6 +185,24 @@ def extract_controls(text: str, relative_path: str) -> list[DiscoveredSymbol]:
                     {"role": role},
                 )
             )
+
+    # Labels the markup never spells out, recovered from the array the element iterates.
+    # A `<button>{lien.label}</button>` is unreadable on its own and perfectly readable
+    # next to the four entries it renders.
+    for label, opening_tag, offset in literals.mapped_labels(text):
+        tag, _, attributes = opening_tag.partition(" ")
+        role = _role_of(tag, attributes)
+        if role is None:
+            continue
+        found.append(
+            DiscoveredSymbol(
+                " ".join(label.split()),
+                "control",
+                relative_path,
+                _line_number(text, offset),
+                {"role": role, "source": "iteration"},
+            )
+        )
     return found
 
 

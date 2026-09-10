@@ -272,3 +272,63 @@ class TestControlRoles:
         assert self._controls("<button>\n  Mentions légales\n</button>") == {
             "Mentions légales": "button"
         }
+
+
+class TestLabelsRenderedFromData:
+    """`<button>{lien.label}</button>` is unreadable alone and exact beside its array."""
+
+    FOOTER = """
+    const LIENS_PIED: { doc: string; label: string }[] = [
+      { doc: "apropos", label: "À propos" },
+      { doc: "cgu", label: "CGU" },
+    ];
+    export function Footer() {
+      return (
+        <footer>
+          {LIENS_PIED.map((lien) => (
+            <button key={lien.doc} onClick={() => ouvrir(lien.doc)}>{lien.label}</button>
+          ))}
+        </footer>
+      );
+    }
+    """
+
+    def _controls(self, source: str) -> set[tuple[str, str]]:
+        from qa_engine.analyzer import extract_controls
+
+        return {(item.metadata["role"], item.name) for item in extract_controls(source, "src/App.tsx")}
+
+    def test_every_entry_becomes_a_control(self):
+        assert self._controls(self.FOOTER) == {("button", "À propos"), ("button", "CGU")}
+
+    def test_an_arrow_handler_does_not_cut_the_tag(self):
+        """`onClick={() => f(x)}` holds a `>`; stopping there lost the control entirely."""
+        source = "<button onClick={() => ouvrir(x)}>Valider</button>"
+        assert self._controls(source) == {("button", "Valider")}
+
+    def test_a_template_literal_attribute_does_not_either(self):
+        source = "<button title={`Raccourci : ${k}`}>Marché</button>"
+        assert self._controls(source) == {("button", "Marché")}
+
+    def test_an_alias_over_a_known_array_is_followed(self):
+        source = """
+        const VIEWS = [{ id: "a", label: "Marché" }];
+        const vues = admin ? [...VIEWS] : VIEWS;
+        const El = () => <nav>{vues.map((item) => (<button>{item.label}</button>))}</nav>;
+        """
+        assert ("button", "Marché") in self._controls(source)
+
+    def test_a_field_the_entries_do_not_carry_yields_nothing(self):
+        source = """
+        const ITEMS = [{ id: "a" }];
+        const El = () => <div>{ITEMS.map((item) => (<button>{item.label}</button>))}</div>;
+        """
+        assert self._controls(source) == set()
+
+    def test_a_computed_array_is_left_alone(self):
+        """Entries built at runtime state no label, and inventing one is the failure mode."""
+        source = """
+        const ITEMS = rows.map(toEntry);
+        const El = () => <div>{ITEMS.map((item) => (<button>{item.label}</button>))}</div>;
+        """
+        assert self._controls(source) == set()
