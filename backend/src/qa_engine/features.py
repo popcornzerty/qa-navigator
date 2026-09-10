@@ -122,6 +122,11 @@ class DiscoveredFeature:
         """Labelled inputs a test has to fill, with the label `getByLabel` resolves."""
         return self._interactive("field")
 
+    @property
+    def texts(self) -> list[str]:
+        """Literal copy this domain can display, for grounding a text assertion."""
+        return sorted({s.name for s in self.symbols if s.kind == "text"})
+
     def _interactive(self, kind: str) -> list[dict]:
         # The file is carried through: it is the closest thing to a screen this analysis
         # has, and a generator handed one flat list picks a portfolio button to open a

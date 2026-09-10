@@ -280,7 +280,7 @@ def test_the_scenario_prompt_forbids_batching_behaviours(monkeypatch):
         components=[],
         api_calls=[],
         test_ids=[],
-        controls=[], fields=[],
+        controls=[], fields=[], texts=[],
         has_form=False,
         source_files=[],
     )
@@ -351,7 +351,7 @@ def test_a_leaking_scenario_is_regenerated_rather_than_dropped(monkeypatch):
 
     context = generation.FeatureContext(
         name="F", description="", routes=["/"], components=[], api_calls=[],
-        test_ids=[], controls=[], fields=[], has_form=False, source_files=[],
+        test_ids=[], controls=[], fields=[], texts=[], has_form=False, source_files=[],
     )
     scenarios = generation.generate_scenarios(
         context,
@@ -374,7 +374,7 @@ def test_the_prompt_forbids_asserting_an_intermediate_state(monkeypatch):
 
     context = generation.FeatureContext(
         name="F", description="", routes=["/"], components=[], api_calls=[],
-        test_ids=[], controls=[], fields=[], has_form=False, source_files=[],
+        test_ids=[], controls=[], fields=[], texts=[], has_form=False, source_files=[],
     )
     generation.generate_scenarios(
         context,
@@ -428,7 +428,7 @@ class TestScenarioTitles:
         monkeypatch.setattr(generation.ollama, "chat_json", answer)
         context = generation.FeatureContext(
             name="F", description="", routes=["/"], components=[], api_calls=[],
-            test_ids=[], controls=[], fields=[], has_form=False, source_files=[],
+            test_ids=[], controls=[], fields=[], texts=[], has_form=False, source_files=[],
         )
         scenarios = generation.generate_scenarios(
             context,

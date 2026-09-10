@@ -164,6 +164,46 @@ def _field_role(tag: str, attributes: str) -> str:
     return FIELD_ROLES.get(kind.group("value").strip().lower() if kind else "", "textbox")
 
 
+# --- Visible copy --------------------------------------------------------------------
+
+# Text a user can read. Two forms matter and both are needed: a JSX text node, and a
+# string literal in the code — `setErreur("Renseignez votre identifiant…")` never appears
+# in markup, yet it is exactly what a test asserts after a failed sign-in.
+JSX_TEXT = re.compile(r">(?P<value>[^<>{}]*[A-Za-zÀ-ÿ][^<>{}]*)<")
+CODE_STRING = re.compile(r"""(?P<quote>['"])(?P<value>[^'"\n]{6,}?)(?P=quote)""")
+
+# What is not copy: a path, a class list, an identifier, a format string.
+NOT_COPY = re.compile(r"^[\s\W\d]*$|^[a-z0-9_-]+(?:[./][a-z0-9_-]+)+$|^[A-Z_]+$|^\$")
+
+
+def _is_copy(value: str) -> bool:
+    """Whether a literal is something a user could read on screen."""
+    cleaned = value.strip()
+    if len(cleaned) < 3 or NOT_COPY.match(cleaned):
+        return False
+    # Copy has spaces or is a capitalised word; `flex items-center` is a class list, and
+    # its words are lowercase technical tokens.
+    if " " in cleaned:
+        return any(word[:1].isupper() for word in cleaned.split()) or cleaned.endswith((".", "?", "!"))
+    return cleaned[:1].isupper()
+
+
+def extract_texts(text: str, relative_path: str) -> list[DiscoveredSymbol]:
+    """Literal copy the application can display."""
+    found: list[DiscoveredSymbol] = []
+    seen: set[str] = set()
+    for pattern in (JSX_TEXT, CODE_STRING):
+        for match in pattern.finditer(text):
+            value = " ".join(match.group("value").split())
+            if value in seen or not _is_copy(value):
+                continue
+            seen.add(value)
+            found.append(
+                DiscoveredSymbol(value, "text", relative_path, _line_number(text, match.start()))
+            )
+    return found
+
+
 def extract_fields(text: str, relative_path: str) -> list[DiscoveredSymbol]:
     """Labelled inputs, with the role and the label a test needs to reach them."""
     found: list[DiscoveredSymbol] = []
@@ -445,6 +485,7 @@ def extract_symbols(text: str, relative_path: str) -> list[DiscoveredSymbol]:
     if file_has_jsx:
         symbols.extend(extract_controls(text, relative_path))
         symbols.extend(extract_fields(text, relative_path))
+        symbols.extend(extract_texts(text, relative_path))
 
     for pattern in (TESTID_PATTERN, TESTID_PROPERTY):
         for match in pattern.finditer(text):

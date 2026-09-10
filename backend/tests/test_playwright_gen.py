@@ -741,7 +741,7 @@ def test_the_home_is_named_and_allowed(tmp_path: Path, monkeypatch):
 
     context = SimpleNamespace(
         name="Frontend", description="", routes=["#cgu"], components=[], api_calls=[],
-        test_ids=[], controls=[], fields=[], has_form=False, source_files=[], excerpts=[],
+        test_ids=[], controls=[], fields=[], texts=[], has_form=False, source_files=[], excerpts=[],
     )
     spec = playwright_gen.generate_spec(
         context, story_id="US-060", story_title="T", scenario_id="US-060-SC-1",
@@ -809,7 +809,7 @@ class TestDeclaredCredentials:
 
         context = SimpleNamespace(
             name="F", description="", routes=["/"], components=[], api_calls=[],
-            test_ids=[], controls=[], fields=[], has_form=True, source_files=[], excerpts=[],
+            test_ids=[], controls=[], fields=[], texts=[], has_form=True, source_files=[], excerpts=[],
         )
         playwright_gen.generate_spec(
             context, story_id="US-070", story_title="T", scenario_id="US-070-SC-1",
@@ -847,3 +847,61 @@ class TestMalformedLines:
             "await expect(page.getByRole('button', { name: 'X' })).toBeVisible();", set()
         )
         assert accepted is not None
+
+
+class TestTextIsGrounded:
+    COPY = ["Renseignez votre identifiant et votre mot de passe.", "Identifiant"]
+
+    def test_an_invented_message_is_refused(self):
+        """The application says "Renseignez votre identifiant…" and never "requis"."""
+        accepted, reason = playwright_gen.validate_line(
+            "await expect(page.getByText('Identifiant requis')).toBeVisible();",
+            set(), None, None, None, self.COPY,
+        )
+        assert accepted is None
+        assert "Identifiant requis" in reason
+
+    def test_a_fragment_of_real_copy_passes(self):
+        accepted, _ = playwright_gen.validate_line(
+            "await expect(page.getByText('Renseignez votre identifiant')).toBeVisible();",
+            set(), None, None, None, self.COPY,
+        )
+        assert accepted is not None
+
+    def test_containment_runs_one_way_only(self):
+        """"Identifiant requis" contains the known label "Identifiant"; read in reverse,
+        every invention holding a real word would pass."""
+        accepted, _ = playwright_gen.validate_line(
+            "await expect(page.getByText('Identifiant obligatoire')).toBeVisible();",
+            set(), None, None, None, self.COPY,
+        )
+        assert accepted is None
+
+    def test_a_silent_analysis_refuses_nothing(self):
+        accepted, _ = playwright_gen.validate_line(
+            "await expect(page.getByText('N’importe quoi')).toBeVisible();",
+            set(), None, None, None, [],
+        )
+        assert accepted is not None
+
+
+def test_a_when_that_only_asserts_is_reported(tmp_path: Path, monkeypatch):
+    """A "When" is the user acting. Code that only checks describes a state, so the
+    scenario has no action and its "Then" observes nothing that happened."""
+    payload = {
+        "etapes": [
+            {"index": 1, "code": ["await page.goto('/cart');"]},
+            {"index": 2, "code": ["await expect(page.getByTestId('cart-line')).toBeVisible();"]},
+            {"index": 3, "code": ["await expect(page.getByTestId('cart-total')).toBeVisible();"]},
+        ]
+    }
+    monkeypatch.setattr(playwright_gen.ollama, "chat_json", lambda *a, **k: payload)
+
+    spec = playwright_gen.generate_spec(
+        _context(tmp_path),
+        story_id="US-080", story_title="S", scenario_id="US-080-SC-1", scenario_name="S",
+        given=["le panier est ouvert"], when=["la ligne est visible"], then=["le total s'affiche"],
+        base_url="http://localhost:8080",
+    )
+    assert not spec.is_runnable
+    assert any("aucune action" in item for item in spec.unresolved)

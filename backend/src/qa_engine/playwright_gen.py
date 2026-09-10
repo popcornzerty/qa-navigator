@@ -53,6 +53,9 @@ TEXT_LOCATOR = re.compile(
     r"\bgetBy(?:Text|Label|Placeholder|Title)\(\s*(['\"`])(?:\\.|(?!\1)[^\\])*\1\s*(?=\))"
 )
 # The role and label a line asks for, to be checked against what the code declares.
+# Text a line claims the application displays.
+TEXT_ASSERTION = re.compile(r"""(?:getByText|toHaveText|toContainText)\s*\(\s*['"`](?P<value>[^'"`]+)""")
+
 ROLE_CALL = re.compile(r"""getByRole\s*\(\s*['"`](?P<role>[^'"`]+)['"`]\s*,\s*{[^}]*\bname\s*:\s*['"`](?P<name>[^'"`]+)""")
 
 ROLE_LOCATOR = re.compile(
@@ -251,12 +254,40 @@ def unbalanced(line: str) -> str | None:
     return None
 
 
+def ungrounded_text(line: str, texts: list[str]) -> str | None:
+    """Name a text assertion the application has no copy for.
+
+    `getByText('Identifiant requis')` on an application whose message reads
+    "Renseignez votre identifiant et votre mot de passe" waits out the timeout and reports
+    the product broken for words it never contained.
+
+    A fragment of a known sentence is accepted, since a test may assert part of one. The
+    containment only runs that way: "Identifiant requis" contains the known label
+    "Identifiant", and reading it in reverse let every invention through that happened to
+    include a real word.
+
+    Nothing is refused when no copy was extracted at all — that is a silent analysis, not
+    a verdict about the application.
+    """
+    if not texts:
+        return None
+    lowered = [item.casefold() for item in texts]
+    for asserted in TEXT_ASSERTION.findall(line):
+        needle = " ".join(asserted.split()).casefold()
+        if len(needle) < 3:
+            continue
+        if not any(needle in item for item in lowered):
+            return f"« {asserted} » ne figure dans aucun texte du code analysé"
+    return None
+
+
 def validate_line(
     line: str,
     known_test_ids: set[str],
     allowed_routes: set[str] | None = None,
     controls: list[dict] | None = None,
     secrets: set[str] | None = None,
+    texts: list[str] | None = None,
 ) -> tuple[str | None, str | None]:
     """Return ``(accepted_line, rejection_reason)``. Exactly one of them is set."""
     candidate = line.strip()
@@ -312,6 +343,10 @@ def validate_line(
     broken = unbalanced(candidate)
     if broken:
         return None, f"parenthésage invalide : {broken}"
+
+    missing = ungrounded_text(candidate, texts or [])
+    if missing:
+        return None, missing
 
     conflict = role_conflict(candidate, controls or [])
     if conflict:
@@ -540,6 +575,7 @@ def _render_steps(
     allowed_routes: set[str],
     controls: list[dict],
     secrets: set[str],
+    texts: list[str],
     prompt: str,
     *,
     temperature: float,
@@ -566,7 +602,7 @@ def _render_steps(
         executable = 0
         for line in by_index.get(index, []):
             valid, reason = validate_line(
-                line, known_test_ids, allowed_routes, controls, secrets
+                line, known_test_ids, allowed_routes, controls, secrets, texts
             )
             if valid:
                 accepted.append(valid)
@@ -579,6 +615,11 @@ def _render_steps(
         # assertions from an otherwise working step is a gap worth showing, not a reason to
         # discard the assertions that do hold — marking the whole test fixme would throw
         # them away too.
+        # A "When" is the user acting. Code that only asserts describes a state, so the
+        # scenario has no action at all and its "Then" observes nothing that happened.
+        if keyword == "When" and executable and not any(ACTION_CALL.search(l) for l in accepted):
+            unresolved.append(f"{keyword} {text} — aucune action, seulement des vérifications")
+
         if executable == 0:
             if not accepted:
                 accepted.append(
@@ -612,6 +653,7 @@ def generate_spec(
     credentials = credentials or {}
     # Only the names. The values stay in the environment the subprocess inherits.
     secrets = set(credentials.values())
+    texts = list(getattr(context, "texts", []) or [])
 
     prompt = _build_prompt(context, story_title, scenario_name, steps, base_url, credentials)
 
@@ -630,7 +672,14 @@ def generate_spec(
     allowed_routes.add(home_route(allowed_routes))
     controls = getattr(context, "controls", []) or []
     body, unresolved = _render_steps(
-        steps, known_test_ids, allowed_routes, controls, secrets, prompt, temperature=0.2
+        steps,
+        known_test_ids,
+        allowed_routes,
+        controls,
+        secrets,
+        texts,
+        prompt,
+        temperature=0.2,
     )
     if len(unresolved) >= len(steps):
         logger.info("Every step came back unusable for %s; retrying", scenario_id)
@@ -646,6 +695,7 @@ def generate_spec(
             allowed_routes,
             controls,
             secrets,
+            texts,
             retry_prompt,
             temperature=RETRY_TEMPERATURE,
         )

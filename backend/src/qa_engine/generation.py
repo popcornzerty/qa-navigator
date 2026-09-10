@@ -148,6 +148,9 @@ class FeatureContext:
     # Labelled inputs, so a scenario that fills a form aims at a real field instead of
     # inventing a CSS selector for one.
     fields: list[dict]
+    # Literal copy the domain can display, so an assertion on visible text is grounded
+    # rather than imagined.
+    texts: list[str]
     has_form: bool
     source_files: list[str]
     excerpts: list[tuple[str, str]] = field(default_factory=list)
@@ -197,6 +200,7 @@ def build_context(feature_row, repository_path: str) -> FeatureContext:
         test_ids=evidence.get("test_ids", []),
         controls=evidence.get("controls", []),
         fields=evidence.get("fields", []),
+        texts=evidence.get("texts", []),
         has_form=bool(evidence.get("has_form")),
         source_files=source_files,
         excerpts=excerpts,
