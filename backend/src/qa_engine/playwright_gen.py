@@ -215,6 +215,7 @@ def validate_line(
     known_test_ids: set[str],
     allowed_routes: set[str] | None = None,
     controls: list[dict] | None = None,
+    secrets: set[str] | None = None,
 ) -> tuple[str | None, str | None]:
     """Return ``(accepted_line, rejection_reason)``. Exactly one of them is set."""
     candidate = line.strip()
@@ -222,7 +223,16 @@ def validate_line(
         return None, "ligne vide"
     if candidate.startswith("//"):
         return candidate, None
-    if FORBIDDEN.search(candidate):
+
+    # `process.` is banned so generated code cannot reach for whatever it likes. A test
+    # that signs in still needs a credential, so the variables a project declared are
+    # blanked before the ban is applied — the door opens exactly that far, and any other
+    # environment access is still refused.
+    inspected = candidate
+    for name in sorted(secrets or ()):
+        inspected = inspected.replace(f"process.env.{name}", "«secret»")
+
+    if FORBIDDEN.search(inspected):
         return None, "instruction interdite (import, système de fichiers ou exécution)"
     if not STATEMENT.match(candidate):
         return None, "n'est pas une instruction Playwright"
@@ -317,6 +327,7 @@ def _build_prompt(
     scenario_name: str,
     steps: list[tuple[str, str]],
     base_url: str,
+    credentials: dict[str, str] | None = None,
 ) -> str:
     # Numbered from 1: with a 0-based list, small models return code shifted by one step,
     # putting an assertion under a "Quand" and an action under an "Alors".
@@ -325,6 +336,20 @@ def _build_prompt(
     )
     anchors = (
         ", ".join(sorted(context.test_ids)) if context.test_ids else "aucune ancre disponible"
+    )
+
+    # Named, never valued. A credential belongs in the environment the subprocess
+    # inherits: passing the value here would put it in a prompt, and from there into a
+    # log, a database row and a screen.
+    secret_block = (
+        "Identifiants disponibles à l'exécution, à écrire ainsi et jamais en clair : "
+        + ", ".join(
+            f"{label} = process.env.{variable}"
+            for label, variable in (credentials or {}).items()
+        )
+        + "\n"
+        if credentials
+        else ""
     )
 
     # Written as the call the model should produce, rather than as a table it has to
@@ -366,6 +391,7 @@ def _build_prompt(
         "`page.goto(...)`, ni dans un `toHaveURL(...)`. Toute autre page contient un "
         "paramètre dans son URL et ne s'atteint qu'en naviguant depuis l'une d'elles.\n"
         f"Adresse d'accueil : {home}\n"
+        f"{secret_block}"
         "Une étape « Given » qui décrit un état de départ — « l'utilisateur est "
         f"connecté », « sur la page d'accueil » — s'ouvre sur {home}, jamais sur la page "
         "que le scénario doit atteindre : partir de la destination ferait un test qui "
@@ -436,6 +462,7 @@ def _render_steps(
     known_test_ids: set[str],
     allowed_routes: set[str],
     controls: list[dict],
+    secrets: set[str],
     prompt: str,
     *,
     temperature: float,
@@ -461,7 +488,9 @@ def _render_steps(
         accepted: list[str] = []
         executable = 0
         for line in by_index.get(index, []):
-            valid, reason = validate_line(line, known_test_ids, allowed_routes, controls)
+            valid, reason = validate_line(
+                line, known_test_ids, allowed_routes, controls, secrets
+            )
             if valid:
                 accepted.append(valid)
                 executable += 1
@@ -498,12 +527,16 @@ def generate_spec(
     then: list[str],
     *,
     base_url: str,
+    credentials: dict[str, str] | None = None,
 ) -> GeneratedSpec:
     """Produce one ``.spec.ts`` for a single Gherkin scenario."""
     steps = flatten_steps(given, when, then)
     known_test_ids = set(context.test_ids)
+    credentials = credentials or {}
+    # Only the names. The values stay in the environment the subprocess inherits.
+    secrets = set(credentials.values())
 
-    prompt = _build_prompt(context, story_title, scenario_name, steps, base_url)
+    prompt = _build_prompt(context, story_title, scenario_name, steps, base_url, credentials)
 
     # Generation is high variance: the same model and prompt can return nothing usable on
     # one call and a fully valid set on the next. A spec where *every* step failed is far
@@ -520,7 +553,7 @@ def generate_spec(
     allowed_routes.add(home_route(allowed_routes))
     controls = getattr(context, "controls", []) or []
     body, unresolved = _render_steps(
-        steps, known_test_ids, allowed_routes, controls, prompt, temperature=0.2
+        steps, known_test_ids, allowed_routes, controls, secrets, prompt, temperature=0.2
     )
     if len(unresolved) >= len(steps):
         logger.info("Every step came back unusable for %s; retrying", scenario_id)
@@ -535,6 +568,7 @@ def generate_spec(
             known_test_ids,
             allowed_routes,
             controls,
+            secrets,
             retry_prompt,
             temperature=RETRY_TEMPERATURE,
         )

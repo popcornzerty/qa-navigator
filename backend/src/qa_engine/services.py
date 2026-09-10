@@ -9,6 +9,7 @@ rather than being reported as completed.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections import Counter
 from datetime import datetime, timezone
@@ -554,6 +555,17 @@ def playwright_setting(project: Project, name: str, fallback: str) -> str:
     return stored.get(name) or stored.get(camel) or fallback
 
 
+def declared_credentials(project: Project) -> dict[str, str]:
+    """Environment variables this project lets a generated test read.
+
+    Only the ones actually present are offered: naming a variable the runner will not have
+    produces a spec that fills a field with `undefined` and fails on the application rather
+    than on the missing configuration.
+    """
+    declared = (project.playwright_config or {}).get("credentials") or {}
+    return {label: name for label, name in declared.items() if os.environ.get(name)}
+
+
 def _base_url_for(project: Project) -> str:
     """The address a generated spec should navigate to.
 
@@ -654,6 +666,7 @@ def generate_playwright_for_scenario(scenario_id: str) -> None:
             when=scenario.when or [],
             then=scenario.then or [],
             base_url=base_url,
+            credentials=declared_credentials(project),
         )
 
         directory = spec_directory(project)

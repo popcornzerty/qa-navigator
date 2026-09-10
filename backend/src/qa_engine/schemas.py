@@ -102,6 +102,12 @@ class PlaywrightSettings(Wire):
     base_url: str = "http://localhost:8080"
     browsers: list[str] = ["chromium"]
     headless: bool = True
+    # What a generated test may read from the environment, as {label: VARIABLE}. A spec
+    # that has to sign in needs a credential, and the engine forbids `process.` outright
+    # so that generated code cannot reach for whatever it likes. Naming the variables here
+    # keeps the ban and opens exactly the door the project chose to open; the values
+    # themselves stay in the environment and never enter the database.
+    credentials: dict[str, str] = {}
 
 
 class ProjectSettingsRead(Wire):

@@ -753,3 +753,68 @@ def test_the_home_is_named_and_allowed(tmp_path: Path, monkeypatch):
     # And the address the prompt recommends survives validation.
     assert "await page.goto('/');" in spec.source
     assert spec.is_runnable
+
+
+class TestDeclaredCredentials:
+    """`process.` is banned so generated code cannot reach for whatever it likes.
+
+    A test that signs in still needs a credential, so a project may name the variables
+    holding them — and only those.
+    """
+
+    ALLOWED = {"PEATERM_E2E_USER"}
+
+    def test_a_declared_variable_may_be_read(self):
+        accepted, _ = playwright_gen.validate_line(
+            "await page.getByLabel('Identifiant').fill(process.env.PEATERM_E2E_USER);",
+            set(),
+            None,
+            None,
+            self.ALLOWED,
+        )
+        assert accepted is not None
+
+    def test_any_other_variable_is_still_refused(self):
+        accepted, reason = playwright_gen.validate_line(
+            "await page.getByLabel('X').fill(process.env.AWS_SECRET_ACCESS_KEY);",
+            set(),
+            None,
+            None,
+            self.ALLOWED,
+        )
+        assert accepted is None
+        assert "interdite" in reason
+
+    def test_the_ban_on_process_itself_holds(self):
+        accepted, _ = playwright_gen.validate_line(
+            "await page.evaluate(() => process.exit(0));", set(), None, None, self.ALLOWED
+        )
+        assert accepted is None
+
+    def test_nothing_is_readable_when_a_project_declares_nothing(self):
+        accepted, _ = playwright_gen.validate_line(
+            "await page.getByLabel('I').fill(process.env.PEATERM_E2E_USER);", set(), None, None, set()
+        )
+        assert accepted is None
+
+    def test_the_prompt_names_the_variable_and_never_its_value(self, tmp_path: Path, monkeypatch):
+        captured: list[str] = []
+
+        def capture(_system, prompt, _schema, **kwargs):
+            captured.append(prompt)
+            return {"etapes": []}
+
+        monkeypatch.setattr(playwright_gen.ollama, "chat_json", capture)
+        monkeypatch.setenv("PEATERM_E2E_PASSWORD", "un-mot-de-passe-reel")
+
+        context = SimpleNamespace(
+            name="F", description="", routes=["/"], components=[], api_calls=[],
+            test_ids=[], controls=[], has_form=True, source_files=[], excerpts=[],
+        )
+        playwright_gen.generate_spec(
+            context, story_id="US-070", story_title="T", scenario_id="US-070-SC-1",
+            scenario_name="S", given=["a"], when=[], then=[], base_url="http://x",
+            credentials={"mot de passe": "PEATERM_E2E_PASSWORD"},
+        )
+        assert "process.env.PEATERM_E2E_PASSWORD" in captured[0]
+        assert "un-mot-de-passe-reel" not in captured[0], "a secret must not travel in a prompt"
