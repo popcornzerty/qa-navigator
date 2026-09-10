@@ -398,3 +398,23 @@ class TestScreensAreSeparateDomains:
     def test_a_plain_component_directory_is_unaffected(self, tmp_path: Path):
         names = self._domains(tmp_path, "frontend/src/components/Chart.tsx")
         assert names == {"Frontend"}
+
+
+class TestHeadings:
+    """A heading is how a test says which screen it is on."""
+
+    def _controls(self, source: str) -> set[tuple[str, str]]:
+        from qa_engine.analyzer import extract_controls
+
+        return {(item.metadata["role"], item.name) for item in extract_controls(source, "a.tsx")}
+
+    def test_a_heading_is_evidence_like_any_other(self):
+        """Absent from the evidence, one was invented — `getByRole('heading', { name:
+        'Connexion' })` on a login screen that has none — and the run timed out on it."""
+        assert self._controls("<h1>Mentions légales</h1>") == {("heading", "Mentions légales")}
+
+    def test_every_level_counts(self):
+        assert self._controls("<h3 className='x'>Hébergeur</h3>") == {("heading", "Hébergeur")}
+
+    def test_a_computed_heading_states_nothing(self):
+        assert self._controls("<h1>{titre}</h1>") == set()

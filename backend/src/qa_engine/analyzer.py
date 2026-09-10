@@ -213,6 +213,11 @@ def extract_fields(text: str, relative_path: str) -> list[DiscoveredSymbol]:
 
 # Tag to the ARIA role Playwright resolves it to. Deliberately short: a role guessed from
 # a tag we do not understand would be worse than no answer at all.
+# A heading is what a test uses to say which screen it is on. Absent from the
+# evidence, the model invented one — `getByRole('heading', { name: 'Connexion' })`
+# on a login screen that has no heading at all — and the run spent its timeout there.
+HEADING = re.compile(r"""<h[1-6]\b[^>]*>\s*(?P<label>[^<>{}]+?)\s*</h[1-6]>""", re.DOTALL)
+
 IMPLICIT_ROLES = {
     "button": "button",
     "a": "link",
@@ -279,6 +284,16 @@ def _role_of(tag: str, attributes: str) -> str | None:
 def extract_controls(text: str, relative_path: str) -> list[DiscoveredSymbol]:
     """Clickable elements carrying a literal label, with the role Playwright will see."""
     found: list[DiscoveredSymbol] = []
+    for match in HEADING.finditer(text):
+        label = " ".join(match.group("label").split())
+        if label:
+            found.append(
+                DiscoveredSymbol(
+                    label, "control", relative_path, _line_number(text, match.start()),
+                    {"role": "heading"},
+                )
+            )
+
     for pattern in (LABELLED_CONTROL, ARIA_LABEL):
         for match in pattern.finditer(text):
             label = " ".join(match.group("label").split())
