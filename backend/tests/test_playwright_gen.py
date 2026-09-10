@@ -818,3 +818,32 @@ class TestDeclaredCredentials:
         )
         assert "process.env.PEATERM_E2E_PASSWORD" in captured[0]
         assert "un-mot-de-passe-reel" not in captured[0], "a secret must not travel in a prompt"
+
+
+class TestMalformedLines:
+    """TypeScript that cannot be parsed fails the whole spec, not just its step."""
+
+    def test_an_extra_closing_parenthesis_is_refused(self):
+        line = "await expect(page.getByRole('button', { name: 'X' }))).toBeVisible();"
+        accepted, reason = playwright_gen.validate_line(line, set())
+        assert accepted is None
+        assert "parenthésage" in reason
+
+    def test_an_unclosed_call_is_refused(self):
+        accepted, _ = playwright_gen.validate_line(
+            "await expect(page.getByTestId('x').toBeVisible();", {"x"}
+        )
+        assert accepted is None
+
+    def test_a_bracket_inside_a_string_does_not_count(self):
+        """A locator may legitimately contain one."""
+        accepted, _ = playwright_gen.validate_line(
+            "await page.getByText('un )( bizarre', { exact: true }).click();", set()
+        )
+        assert accepted is not None
+
+    def test_a_balanced_line_passes(self):
+        accepted, _ = playwright_gen.validate_line(
+            "await expect(page.getByRole('button', { name: 'X' })).toBeVisible();", set()
+        )
+        assert accepted is not None

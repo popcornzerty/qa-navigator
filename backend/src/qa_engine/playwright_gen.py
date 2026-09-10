@@ -210,6 +210,43 @@ def home_route(routes: set[str]) -> str:
     return paths[0] if paths else "/"
 
 
+def unbalanced(line: str) -> str | None:
+    """Name the bracket a line leaves open or closes too often.
+
+    `expect(page.getByRole('button', { name: 'X' }))).toBeVisible();` — three closing
+    parentheses where two were opened — passed every other check and was written to a
+    file that TypeScript then refuses to compile. Playwright reports that as the whole
+    spec failing, with a parse error naming a line nobody wrote by hand.
+
+    Brackets inside a string are not counted: a locator may legitimately contain one.
+    """
+    pairs = {")": "(", "]": "[", "}": "{"}
+    stack: list[str] = []
+    quote: str | None = None
+    index = 0
+    while index < len(line):
+        char = line[index]
+        if quote is not None:
+            if char == "\\":
+                index += 2
+                continue
+            if char == quote:
+                quote = None
+        elif char in "'\"`":
+            quote = char
+        elif char in "([{":
+            stack.append(char)
+        elif char in pairs:
+            if not stack or stack[-1] != pairs[char]:
+                return f"« {char} » sans ouverture correspondante"
+            stack.pop()
+        index += 1
+
+    if stack:
+        return f"« {stack[-1]} » jamais refermée"
+    return None
+
+
 def validate_line(
     line: str,
     known_test_ids: set[str],
@@ -265,6 +302,12 @@ def validate_line(
     for test_id in TESTID_CALL.findall(candidate):
         if test_id not in known_test_ids:
             return None, f'data-testid "{test_id}" introuvable dans le code analysé'
+
+    # Checked before anything is repaired: appending to a malformed line would only make
+    # the eventual parse error harder to read.
+    broken = unbalanced(candidate)
+    if broken:
+        return None, f"parenthésage invalide : {broken}"
 
     conflict = role_conflict(candidate, controls or [])
     if conflict:
