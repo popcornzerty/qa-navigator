@@ -89,6 +89,35 @@ TESTID_PATTERN = re.compile(r"data-testid\s*=\s*(?:\{\s*)?(['\"])(?P<value>[^'\"
 # `data-testid` dynamic, so reading only the attribute misses them. Accepting `:` and `=`
 # covers both. This also matches `data-testid=` itself, which simply dedupes.
 TESTID_PROPERTY = re.compile(r"\btest[iI][dD]\s*[:=]\s*(['\"])(?P<value>[^'\"]+)\1")
+# --- Interactive controls ------------------------------------------------------------
+
+# A clickable element whose label is written literally in the source. The role is what a
+# generated test must ask for: `getByRole('link', { name: 'À propos' })` finds nothing when
+# the element is a `<button>`, and Playwright waits the full timeout before saying so.
+# Only literal labels are read — `<button>{item.label}</button>` says nothing about the
+# text a user sees, and guessing it is how a test comes to look for something imaginary.
+LABELLED_CONTROL = re.compile(
+    r"<(?P<tag>button|a)\b(?P<attrs>[^>]*)>\s*(?P<label>[^<>{}]+?)\s*</(?P=tag)>",
+    re.DOTALL,
+)
+ARIA_LABEL = re.compile(
+    r"<(?P<tag>[a-z][\w-]*)\b(?P<attrs>[^>]*?\baria-label\s*=\s*[\"']"
+    r"(?P<label>[^\"']+)[\"'][^>]*)>"
+)
+EXPLICIT_ROLE = re.compile(r"\brole\s*=\s*[\"'](?P<value>[^\"']+)[\"']")
+HREF_ATTRIBUTE = re.compile(r"\bhref\s*=")
+
+# Tag to the ARIA role Playwright resolves it to. Deliberately short: a role guessed from
+# a tag we do not understand would be worse than no answer at all.
+IMPLICIT_ROLES = {
+    "button": "button",
+    "a": "link",
+    "nav": "navigation",
+    "table": "table",
+    "form": "form",
+}
+
+
 FORM_PATTERN = re.compile(r"<form\b|\bonSubmit\s*=|\buseForm\s*\(")
 
 RESERVED_NAMES = {
@@ -112,7 +141,7 @@ class DiscoveredSymbol:
     """One piece of evidence found in the source. Never an interpretation."""
 
     name: str
-    kind: str  # route | component | hook | api_call | form | testid
+    kind: str  # route | component | hook | api_call | form | testid | control
     source_path: str
     line_number: int
     metadata: dict = field(default_factory=dict)
@@ -120,6 +149,38 @@ class DiscoveredSymbol:
 
 def _line_number(text: str, position: int) -> int:
     return text.count("\n", 0, position) + 1
+
+
+def _role_of(tag: str, attributes: str) -> str | None:
+    """The ARIA role of an element, or None when it cannot be told."""
+    explicit = EXPLICIT_ROLE.search(attributes)
+    if explicit:
+        return explicit.group("value").strip()
+    if tag == "a":
+        # An anchor without href is not a link; Playwright gives it no role.
+        return "link" if HREF_ATTRIBUTE.search(attributes) else None
+    return IMPLICIT_ROLES.get(tag)
+
+
+def extract_controls(text: str, relative_path: str) -> list[DiscoveredSymbol]:
+    """Clickable elements carrying a literal label, with the role Playwright will see."""
+    found: list[DiscoveredSymbol] = []
+    for pattern in (LABELLED_CONTROL, ARIA_LABEL):
+        for match in pattern.finditer(text):
+            label = " ".join(match.group("label").split())
+            role = _role_of(match.group("tag"), match.group("attrs") or "")
+            if not label or role is None:
+                continue
+            found.append(
+                DiscoveredSymbol(
+                    label,
+                    "control",
+                    relative_path,
+                    _line_number(text, match.start()),
+                    {"role": role},
+                )
+            )
+    return found
 
 
 def _is_component_name(name: str) -> bool:
@@ -226,6 +287,9 @@ def extract_symbols(text: str, relative_path: str) -> list[DiscoveredSymbol]:
                 {"client": match.group("client")},
             )
         )
+
+    if file_has_jsx:
+        symbols.extend(extract_controls(text, relative_path))
 
     for pattern in (TESTID_PATTERN, TESTID_PROPERTY):
         for match in pattern.finditer(text):

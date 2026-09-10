@@ -1,5 +1,7 @@
+import os
 from pathlib import Path
 
+from dotenv import dotenv_values
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -56,3 +58,28 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def export_env_file(path: str | Path = ".env") -> list[str]:
+    """Publish the ``.env`` file into the process environment.
+
+    pydantic-settings reads that file for its own typed fields and stops there — nothing
+    lands in ``os.environ``. But a Playwright suite reads its own variables from the
+    environment it is launched in (a repository's real-session tests want credentials, for
+    instance), and the engine hands the subprocess a copy of ``os.environ``. Without this,
+    the only place such a variable could be set was the shell that started the service,
+    which is invisible to anyone reading the configuration file.
+
+    An existing variable always wins: what the operator exported for this run is a
+    deliberate act, and a file should not silently override it.
+
+    Returns the names published, never their values — these are secrets, and the log of a
+    run is persisted and displayed.
+    """
+    published: list[str] = []
+    for key, value in dotenv_values(path).items():
+        if value is None or key in os.environ:
+            continue
+        os.environ[key] = value
+        published.append(key)
+    return published

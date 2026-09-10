@@ -52,6 +52,9 @@ HYDRATION_ANCHOR = "app-ready"
 TEXT_LOCATOR = re.compile(
     r"\bgetBy(?:Text|Label|Placeholder|Title)\(\s*(['\"`])(?:\\.|(?!\1)[^\\])*\1\s*(?=\))"
 )
+# The role and label a line asks for, to be checked against what the code declares.
+ROLE_CALL = re.compile(r"""getByRole\s*\(\s*['"`](?P<role>[^'"`]+)['"`]\s*,\s*{[^}]*\bname\s*:\s*['"`](?P<name>[^'"`]+)""")
+
 ROLE_LOCATOR = re.compile(
     r"\bgetByRole\(\s*(['\"`])[^'\"`]+\1\s*,\s*\{(?![^}]*\bexact\b)[^}]*\bname\s*:[^}]*(?=\})"
 )
@@ -178,6 +181,7 @@ def validate_line(
     line: str,
     known_test_ids: set[str],
     allowed_routes: set[str] | None = None,
+    controls: list[dict] | None = None,
 ) -> tuple[str | None, str | None]:
     """Return ``(accepted_line, rejection_reason)``. Exactly one of them is set."""
     candidate = line.strip()
@@ -219,6 +223,10 @@ def validate_line(
         if test_id not in known_test_ids:
             return None, f'data-testid "{test_id}" introuvable dans le code analysé'
 
+    conflict = role_conflict(candidate, controls or [])
+    if conflict:
+        return None, conflict
+
     candidate = anchor_text_locators(candidate)
 
     # An un-awaited `expect(...)` returns a promise nobody resolves: it asserts nothing and
@@ -226,6 +234,35 @@ def validate_line(
     if NEEDS_AWAIT.match(candidate):
         candidate = f"await {candidate}"
     return candidate, None
+
+
+def role_conflict(line: str, controls: list[dict]) -> str | None:
+    """Reason to refuse a `getByRole` the analysed code contradicts.
+
+    Only a *contradiction* is refused: the label exists, and never under the role asked
+    for. Asking for a role an element does not have finds nothing, and Playwright waits
+    out the whole timeout before saying so — thirty seconds to learn that a `<button>`
+    was called a `link`.
+
+    A label the analysis never saw is not refused. Plenty of real labels are computed at
+    runtime (`<button>{item.label}</button>`), and their absence here is a limit of static
+    reading, not evidence that they do not exist. Refusing them would reject correct code.
+    """
+    if not controls:
+        return None
+    known: dict[str, set[str]] = {}
+    for item in controls:
+        known.setdefault(item["name"], set()).add(item["role"])
+
+    for role, name in ROLE_CALL.findall(line):
+        roles = known.get(name)
+        if roles and role not in roles:
+            expected = ", ".join(f"'{value}'" for value in sorted(roles))
+            return (
+                f"« {name} » n'est pas un rôle '{role}' dans le code analysé "
+                f"(rôle relevé : {expected})"
+            )
+    return None
 
 
 def anchor_text_locators(line: str) -> str:
@@ -256,6 +293,22 @@ def _build_prompt(
     anchors = (
         ", ".join(sorted(context.test_ids)) if context.test_ids else "aucune ancre disponible"
     )
+
+    # Written as the call the model should produce, rather than as a table it has to
+    # translate. Asking for a role an element does not have finds nothing, and Playwright
+    # spends the whole timeout before saying so.
+    controls = getattr(context, "controls", []) or []
+    control_block = (
+        "Contrôles relevés dans le code, avec le rôle exact que Playwright leur donne : "
+        + ", ".join(
+            f"getByRole('{item['role']}', {{ name: '{item['name']}' }})"
+            for item in controls[:25]
+        )
+        + "\n"
+        if controls
+        else ""
+    )
+
     direct = sorted(reachable_routes(context.routes))
     routes = ", ".join(direct) if direct else "aucune"
 
@@ -276,7 +329,8 @@ def _build_prompt(
         "Ce sont les SEULES adresses valides : n'en invente aucune autre, ni dans un "
         "`page.goto(...)`, ni dans un `toHaveURL(...)`. Toute autre page contient un "
         "paramètre dans son URL et ne s'atteint qu'en naviguant depuis l'une d'elles.\n"
-        f"Ancres data-testid réellement présentes dans le code : {anchors}\n\n"
+        f"Ancres data-testid réellement présentes dans le code : {anchors}\n"
+        f"{control_block}\n"
         f"USER STORY : {story_title}\n"
         f"SCÉNARIO : {scenario_name}\n"
         f"ÉTAPES :\n{numbered}\n\n"
@@ -309,6 +363,7 @@ def _render_steps(
     steps: list[tuple[str, str]],
     known_test_ids: set[str],
     allowed_routes: set[str],
+    controls: list[dict],
     prompt: str,
     *,
     temperature: float,
@@ -334,7 +389,7 @@ def _render_steps(
         accepted: list[str] = []
         executable = 0
         for line in by_index.get(index, []):
-            valid, reason = validate_line(line, known_test_ids, allowed_routes)
+            valid, reason = validate_line(line, known_test_ids, allowed_routes, controls)
             if valid:
                 accepted.append(valid)
                 executable += 1
@@ -385,8 +440,9 @@ def generate_spec(
     # most likely answer, which is exactly the one that just failed. It samples higher
     # instead, and says plainly what was wrong with the previous reply.
     allowed_routes = reachable_routes(context.routes)
+    controls = getattr(context, "controls", []) or []
     body, unresolved = _render_steps(
-        steps, known_test_ids, allowed_routes, prompt, temperature=0.2
+        steps, known_test_ids, allowed_routes, controls, prompt, temperature=0.2
     )
     if len(unresolved) >= len(steps):
         logger.info("Every step came back unusable for %s; retrying", scenario_id)
@@ -397,7 +453,12 @@ def generate_spec(
             "valide pour les étapes que les ancres permettent d'atteindre."
         )
         retry_body, retry_unresolved = _render_steps(
-            steps, known_test_ids, allowed_routes, retry_prompt, temperature=RETRY_TEMPERATURE
+            steps,
+            known_test_ids,
+            allowed_routes,
+            controls,
+            retry_prompt,
+            temperature=RETRY_TEMPERATURE,
         )
         if len(retry_unresolved) < len(unresolved):
             body, unresolved = retry_body, retry_unresolved

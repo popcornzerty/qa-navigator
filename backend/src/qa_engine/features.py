@@ -104,6 +104,20 @@ class DiscoveredFeature:
         return sorted({s.name for s in self.symbols if s.kind == "api_call"})
 
     @property
+    def controls(self) -> list[dict]:
+        """Labelled controls with the role Playwright resolves them to.
+
+        A generated test asks for a role, and asking for the wrong one finds nothing —
+        the locator then waits out the full timeout before saying so. Only literal labels
+        appear here: a label computed at runtime is not evidence of anything.
+        """
+        seen: dict[tuple[str, str], None] = {}
+        for symbol in self.symbols:
+            if symbol.kind == "control" and symbol.metadata.get("role"):
+                seen.setdefault((symbol.metadata["role"], symbol.name), None)
+        return [{"role": role, "name": name} for role, name in sorted(seen)]
+
+    @property
     def test_ids(self) -> list[str]:
         return sorted({s.name for s in self.symbols if s.kind == "testid"})
 

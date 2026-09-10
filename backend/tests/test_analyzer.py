@@ -232,3 +232,43 @@ class TestHashRoutesDoNotFragmentDomains:
         )
         _, symbols = extract_repository_metadata(tmp_path)
         assert {feature.name for feature in group_symbols(symbols)} == {"Panier"}
+
+
+class TestControlRoles:
+    """A test asks for a role; asking for the wrong one waits out the whole timeout."""
+
+    def _controls(self, source: str) -> dict[str, str]:
+        from qa_engine.analyzer import extract_controls
+
+        return {
+            item.name: item.metadata["role"]
+            for item in extract_controls(source, "src/App.tsx")
+        }
+
+    def test_a_button_is_a_button_and_an_anchor_a_link(self):
+        source = (
+            '<div><button onClick={go}>À propos</button>'
+            '<a href="#cgu">CGU</a></div>'
+        )
+        assert self._controls(source) == {"À propos": "button", "CGU": "link"}
+
+    def test_an_anchor_without_href_has_no_role(self):
+        """Playwright gives it none either, so claiming `link` would mislead."""
+        assert self._controls("<a onClick={go}>Ouvrir</a>") == {}
+
+    def test_an_explicit_role_wins_over_the_tag(self):
+        assert self._controls('<a href="/x" role="button">Valider</a>') == {"Valider": "button"}
+
+    def test_a_computed_label_is_not_recorded(self):
+        """`{item.label}` says nothing about the text a user sees; guessing it invents one."""
+        assert self._controls("<button>{lien.label}</button>") == {}
+
+    def test_an_aria_label_is_read(self):
+        assert self._controls('<button aria-label="Fermer"><Icon /></button>') == {
+            "Fermer": "button"
+        }
+
+    def test_whitespace_around_a_label_is_normalised(self):
+        assert self._controls("<button>\n  Mentions légales\n</button>") == {
+            "Mentions légales": "button"
+        }

@@ -621,3 +621,47 @@ def test_the_hydration_rule_is_offered_only_when_the_anchor_exists(tmp_path: Pat
         scenario_name="S", given=["a"], when=[], then=[], base_url="http://localhost:8080",
     )
     assert captured and all("app-ready" in prompt for prompt in captured)
+
+
+class TestRoleIsCheckedAgainstTheCode:
+    CONTROLS = [
+        {"role": "button", "name": "À propos"},
+        {"role": "link", "name": "Ko-fi"},
+    ]
+
+    def test_a_role_the_code_contradicts_is_refused(self):
+        """The failure this exists for: 30 seconds of timeout to learn it was a button."""
+        accepted, reason = playwright_gen.validate_line(
+            "await page.getByRole('link', { name: 'À propos' }).click();",
+            set(),
+            None,
+            self.CONTROLS,
+        )
+        assert accepted is None
+        assert "button" in reason
+
+    def test_the_role_the_code_declares_passes(self):
+        accepted, _ = playwright_gen.validate_line(
+            "await page.getByRole('button', { name: 'À propos' }).click();",
+            set(),
+            None,
+            self.CONTROLS,
+        )
+        assert accepted is not None
+
+    def test_a_label_the_analysis_never_saw_is_left_alone(self):
+        """Many real labels are computed at runtime; their absence is a limit of reading,
+        not evidence that they do not exist. Refusing them would reject correct code."""
+        accepted, _ = playwright_gen.validate_line(
+            "await page.getByRole('link', { name: 'Inconnu' }).click();",
+            set(),
+            None,
+            self.CONTROLS,
+        )
+        assert accepted is not None
+
+    def test_nothing_is_refused_when_no_control_was_extracted(self):
+        accepted, _ = playwright_gen.validate_line(
+            "await page.getByRole('link', { name: 'À propos' }).click();", set(), None, []
+        )
+        assert accepted is not None

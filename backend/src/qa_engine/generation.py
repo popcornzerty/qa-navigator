@@ -107,6 +107,9 @@ class FeatureContext:
     components: list[str]
     api_calls: list[str]
     test_ids: list[str]
+    # Labelled controls with their ARIA role, so a test can ask for what the element
+    # actually is instead of guessing between a button and a link.
+    controls: list[dict]
     has_form: bool
     source_files: list[str]
     excerpts: list[tuple[str, str]] = field(default_factory=list)
@@ -154,6 +157,7 @@ def build_context(feature_row, repository_path: str) -> FeatureContext:
         components=evidence.get("components", []),
         api_calls=evidence.get("api_calls", []),
         test_ids=evidence.get("test_ids", []),
+        controls=evidence.get("controls", []),
         has_form=bool(evidence.get("has_form")),
         source_files=source_files,
         excerpts=excerpts,
