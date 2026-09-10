@@ -498,6 +498,7 @@ def run_analysis(analysis_id: str) -> None:
                         "api_calls": feature.api_calls,
                         "test_ids": sorted(set(feature.test_ids) | set(shared_anchors)),
                         "controls": feature.controls,
+                        "fields": feature.fields,
                         "has_form": feature.has_form,
                     },
                 )

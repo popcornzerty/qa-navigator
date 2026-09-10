@@ -145,6 +145,9 @@ class FeatureContext:
     # Labelled controls with their ARIA role, so a test can ask for what the element
     # actually is instead of guessing between a button and a link.
     controls: list[dict]
+    # Labelled inputs, so a scenario that fills a form aims at a real field instead of
+    # inventing a CSS selector for one.
+    fields: list[dict]
     has_form: bool
     source_files: list[str]
     excerpts: list[tuple[str, str]] = field(default_factory=list)
@@ -193,6 +196,7 @@ def build_context(feature_row, repository_path: str) -> FeatureContext:
         api_calls=evidence.get("api_calls", []),
         test_ids=evidence.get("test_ids", []),
         controls=evidence.get("controls", []),
+        fields=evidence.get("fields", []),
         has_form=bool(evidence.get("has_form")),
         source_files=source_files,
         excerpts=excerpts,

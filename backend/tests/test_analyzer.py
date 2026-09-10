@@ -332,3 +332,69 @@ class TestLabelsRenderedFromData:
         const El = () => <div>{ITEMS.map((item) => (<button>{item.label}</button>))}</div>;
         """
         assert self._controls(source) == set()
+
+
+class TestFormFields:
+    """Only "a form exists" was recorded, which a generator cannot act on: with no field
+    to fill it invented `input[name="email"]` and ignored the credentials offered to it."""
+
+    def _fields(self, source: str) -> set[tuple[str, str]]:
+        from qa_engine.analyzer import extract_fields
+
+        return {(item.metadata["role"], item.name) for item in extract_fields(source, "src/Login.tsx")}
+
+    def test_a_label_wrapping_its_input_is_read(self):
+        source = "<label><span>Identifiant</span><input autoComplete='username' /></label>"
+        assert self._fields(source) == {("textbox", "Identifiant")}
+
+    def test_a_password_is_reached_by_label_not_by_role(self):
+        """`type=password` has no ARIA role of its own."""
+        source = '<label><span>Mot de passe</span><input type="password" /></label>'
+        assert self._fields(source) == {("textbox", "Mot de passe")}
+
+    def test_a_checkbox_keeps_its_own_role(self):
+        source = '<label><span>Se souvenir</span><input type="checkbox" /></label>'
+        assert self._fields(source) == {("checkbox", "Se souvenir")}
+
+    def test_a_placeholder_stands_in_when_there_is_no_label(self):
+        assert self._fields('<input placeholder="Nom ou ticker" />') == {
+            ("textbox", "Nom ou ticker")
+        }
+
+    def test_a_select_is_a_combobox(self):
+        source = "<label><span>Devise</span><select><option>EUR</option></select></label>"
+        assert ("combobox", "Devise") in self._fields(source)
+
+    def test_a_field_with_nothing_to_aim_at_is_not_invented(self):
+        assert self._fields('<input type="hidden" value="x" />') == set()
+
+
+class TestScreensAreSeparateDomains:
+    """A directory named for screens holds one per file."""
+
+    def _domains(self, tmp_path: Path, *paths: str) -> set[str]:
+        from qa_engine.features import group_symbols
+
+        for relative in paths:
+            target = tmp_path / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(
+                'export const Panel = () => <div><button>Agir</button>'
+                '<label><span>Champ</span><input /></label></div>;',
+                encoding="utf-8",
+            )
+        _, symbols = extract_repository_metadata(tmp_path)
+        return {feature.name for feature in group_symbols(symbols)}
+
+    def test_each_panel_is_its_own_domain(self, tmp_path: Path):
+        """Read as a directory, every screen collapsed into one domain and a login
+        scenario was offered the portfolio's buttons."""
+        names = self._domains(
+            tmp_path, "frontend/src/panels/Login.tsx", "frontend/src/panels/Portfolio.tsx"
+        )
+        assert "Portfolio" in names
+        assert "Frontend" not in names
+
+    def test_a_plain_component_directory_is_unaffected(self, tmp_path: Path):
+        names = self._domains(tmp_path, "frontend/src/components/Chart.tsx")
+        assert names == {"Frontend"}

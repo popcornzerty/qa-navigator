@@ -46,6 +46,10 @@ INFRASTRUCTURE_SEGMENTS = {
 # Path segments that carry no domain meaning on their own.
 NEUTRAL_SEGMENTS = {"src", "app", "pages", "routes", "components", "features", "modules", "views"}
 
+# Directories whose name says they hold one screen per file. `panels/Login.tsx` and
+# `panels/Portfolio.tsx` are two areas of a product, not two files of one.
+SCREEN_SEGMENTS = {"panels", "screens", "views", "pages", "sections"}
+
 ROUTE_PARAMETER = re.compile(r"^[$:\[{_-]|^\.\.\.")
 
 FRENCH_DOMAIN_LABELS = {
@@ -111,11 +115,24 @@ class DiscoveredFeature:
         the locator then waits out the full timeout before saying so. Only literal labels
         appear here: a label computed at runtime is not evidence of anything.
         """
-        seen: dict[tuple[str, str], None] = {}
+        return self._interactive("control")
+
+    @property
+    def fields(self) -> list[dict]:
+        """Labelled inputs a test has to fill, with the label `getByLabel` resolves."""
+        return self._interactive("field")
+
+    def _interactive(self, kind: str) -> list[dict]:
+        # The file is carried through: it is the closest thing to a screen this analysis
+        # has, and a generator handed one flat list picks a portfolio button to open a
+        # login form. Grouping them by where they are declared lets it stay on one screen.
+        seen: dict[tuple[str, str, str], None] = {}
         for symbol in self.symbols:
-            if symbol.kind == "control" and symbol.metadata.get("role"):
-                seen.setdefault((symbol.metadata["role"], symbol.name), None)
-        return [{"role": role, "name": name} for role, name in sorted(seen)]
+            if symbol.kind == kind and symbol.metadata.get("role"):
+                seen.setdefault((symbol.source_path, symbol.metadata["role"], symbol.name), None)
+        return [
+            {"file": path, "role": role, "name": name} for path, role, name in sorted(seen)
+        ]
 
     @property
     def test_ids(self) -> list[str]:
@@ -154,6 +171,14 @@ def _path_domain(source_path: str) -> str | None:
     """Domain inferred from a file path, ignoring neutral and infrastructure folders."""
     parts = list(PurePosixPath(source_path).parts)
     directories, filename = parts[:-1], parts[-1]
+
+    # A directory named for screens holds one per file, so the file is the domain. Read as
+    # a directory instead, every screen of the application collapses into a single domain
+    # and a scenario about signing in is offered the portfolio's buttons.
+    if any(part.lower() in SCREEN_SEGMENTS for part in directories):
+        stem = PurePosixPath(filename).stem.lower().split(".")[0].strip("_-")
+        if stem and stem not in NEUTRAL_SEGMENTS and stem not in INFRASTRUCTURE_SEGMENTS:
+            return stem
 
     for part in directories:
         lowered = part.lower()

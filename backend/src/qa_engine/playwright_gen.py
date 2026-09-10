@@ -92,6 +92,10 @@ GENERATED_MARKER = (
 
 RETRY_TEMPERATURE = 0.7
 
+# A prompt listing every screen of a large application would bury the relevant one.
+MAX_SCREENS_IN_PROMPT = 8
+MAX_ELEMENTS_PER_SCREEN = 12
+
 # The canonical Gherkin keywords, not their French translations. Gherkin does localise
 # them, but the step text is already French and the UI renders Given/When/Then: emitting
 # "Étant donné" in the spec while the scenario screen says "Given" left the same step
@@ -364,6 +368,45 @@ def anchor_text_locators(line: str) -> str:
     return ROLE_LOCATOR.sub(lambda match: f"{match.group(0).rstrip()}, exact: true ", line)
 
 
+def _screens_block(controls: list[dict], fields: list[dict]) -> str:
+    """The interactive elements, grouped by the file that declares them.
+
+    One flat list of seventy-nine controls invited a scenario about signing in to click
+    "Mon PEA", a button belonging to the portfolio: nothing said the two live on different
+    screens. The declaring file is the closest thing this analysis has to a screen, so it
+    is what the elements are grouped under, and the model can stay on one of them.
+
+    Fields are listed apart because reaching one is a different call: a password input has
+    no role of its own, and `getByLabel` is what resolves it.
+    """
+    by_file: dict[str, dict[str, list[str]]] = {}
+    for item in controls:
+        entry = by_file.setdefault(item["file"], {"controls": [], "fields": []})
+        entry["controls"].append(f"getByRole('{item['role']}', {{ name: '{item['name']}' }})")
+    for item in fields:
+        entry = by_file.setdefault(item["file"], {"controls": [], "fields": []})
+        entry["fields"].append(f"getByLabel('{item['name']}')")
+
+    if not by_file:
+        return ""
+
+    lines = [
+        "Éléments relevés dans le code, groupés par fichier. Un scénario se déroule sur "
+        "UN écran : prends les éléments d'un seul fichier, ne les mélange pas."
+    ]
+    # Richest first: the screens a scenario is most likely to be about.
+    ordered = sorted(
+        by_file.items(),
+        key=lambda pair: -(len(pair[1]["controls"]) + len(pair[1]["fields"])),
+    )
+    for path, entry in ordered[:MAX_SCREENS_IN_PROMPT]:
+        parts = entry["controls"][:MAX_ELEMENTS_PER_SCREEN]
+        if entry["fields"]:
+            parts.append("champs à remplir : " + ", ".join(entry["fields"]))
+        lines.append(f"  {path} — " + ", ".join(parts))
+    return "\n".join(lines) + "\n"
+
+
 def _build_prompt(
     context: FeatureContext,
     story_title: str,
@@ -399,16 +442,7 @@ def _build_prompt(
     # translate. Asking for a role an element does not have finds nothing, and Playwright
     # spends the whole timeout before saying so.
     controls = getattr(context, "controls", []) or []
-    control_block = (
-        "Contrôles relevés dans le code, avec le rôle exact que Playwright leur donne : "
-        + ", ".join(
-            f"getByRole('{item['role']}', {{ name: '{item['name']}' }})"
-            for item in controls[:25]
-        )
-        + "\n"
-        if controls
-        else ""
-    )
+    control_block = _screens_block(controls, getattr(context, "fields", []) or [])
 
     reachable = reachable_routes(context.routes)
     home = home_route(reachable)

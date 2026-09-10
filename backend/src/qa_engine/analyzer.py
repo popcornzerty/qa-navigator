@@ -115,6 +115,102 @@ ARIA_LABEL = re.compile(
 EXPLICIT_ROLE = re.compile(r"\brole\s*=\s*[\"'](?P<value>[^\"']+)[\"']")
 HREF_ATTRIBUTE = re.compile(r"\bhref\s*=")
 
+# --- Form fields ---------------------------------------------------------------------
+
+# A field a test has to fill. Only the label was ever recorded that a *form exists*, which
+# tells a generator nothing it can act on: with no field to fill, it invented a selector
+# (`input[name="email"]`) and had no reason to use the credentials offered to it.
+#
+# The wrapping form of `<label><span>Identifiant</span><input …></label>` is the shape
+# React codebases use most, and it is exactly what `getByLabel` resolves.
+WRAPPING_LABEL = re.compile(
+    r"<label\b[^>]*>\s*(?:<span[^>]*>\s*)?(?P<label>[^<>{}]+?)\s*(?:</span>\s*)?"
+    r"(?P<field><(?P<tag>input|textarea|select)\b[^>]*)",
+    re.DOTALL,
+)
+# `<label htmlFor="x">Identifiant</label> … <input id="x">` — the association is by id, so
+# only the label is read here; the field it points at is elsewhere in the file.
+LABEL_FOR = re.compile(
+    r"<label\b[^>]*\bhtmlFor\s*=\s*[\"'][^\"']+[\"'][^>]*>\s*(?P<label>[^<>{}]+?)\s*</label>",
+    re.DOTALL,
+)
+# A field with no label at all still has something a test can aim at.
+SELF_LABELLED_FIELD = re.compile(
+    r"<(?P<tag>input|textarea|select)\b(?P<attrs>[^>]*?"
+    r"\b(?:placeholder|aria-label)\s*=\s*[\"'](?P<label>[^\"']+)[\"'][^>]*)"
+)
+INPUT_TYPE = re.compile(r"\btype\s*=\s*[\"'](?P<value>[^\"']+)[\"']")
+
+# What Playwright resolves a field to. `password` has no role of its own, which is why a
+# test reaches it by label rather than by role.
+FIELD_ROLES = {
+    "checkbox": "checkbox",
+    "radio": "radio",
+    "search": "searchbox",
+    "number": "spinbutton",
+    "range": "slider",
+    "select": "combobox",
+    "textarea": "textbox",
+}
+
+
+def _field_role(tag: str, attributes: str) -> str:
+    explicit = EXPLICIT_ROLE.search(attributes)
+    if explicit:
+        return explicit.group("value").strip()
+    if tag in ("textarea", "select"):
+        return FIELD_ROLES[tag]
+    kind = INPUT_TYPE.search(attributes)
+    return FIELD_ROLES.get(kind.group("value").strip().lower() if kind else "", "textbox")
+
+
+def extract_fields(text: str, relative_path: str) -> list[DiscoveredSymbol]:
+    """Labelled inputs, with the role and the label a test needs to reach them."""
+    found: list[DiscoveredSymbol] = []
+    seen: set[str] = set()
+
+    for match in WRAPPING_LABEL.finditer(text):
+        label = " ".join(match.group("label").split())
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        found.append(
+            DiscoveredSymbol(
+                label,
+                "field",
+                relative_path,
+                _line_number(text, match.start()),
+                {"role": _field_role(match.group("tag"), match.group("field"))},
+            )
+        )
+
+    for match in SELF_LABELLED_FIELD.finditer(text):
+        label = " ".join(match.group("label").split())
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        found.append(
+            DiscoveredSymbol(
+                label,
+                "field",
+                relative_path,
+                _line_number(text, match.start()),
+                {"role": _field_role(match.group("tag"), match.group("attrs"))},
+            )
+        )
+
+    for match in LABEL_FOR.finditer(text):
+        label = " ".join(match.group("label").split())
+        if label and label not in seen:
+            seen.add(label)
+            found.append(
+                DiscoveredSymbol(
+                    label, "field", relative_path, _line_number(text, match.start()), {"role": "textbox"}
+                )
+            )
+    return found
+
+
 # Tag to the ARIA role Playwright resolves it to. Deliberately short: a role guessed from
 # a tag we do not understand would be worse than no answer at all.
 IMPLICIT_ROLES = {
@@ -333,6 +429,7 @@ def extract_symbols(text: str, relative_path: str) -> list[DiscoveredSymbol]:
 
     if file_has_jsx:
         symbols.extend(extract_controls(text, relative_path))
+        symbols.extend(extract_fields(text, relative_path))
 
     for pattern in (TESTID_PATTERN, TESTID_PROPERTY):
         for match in pattern.finditer(text):

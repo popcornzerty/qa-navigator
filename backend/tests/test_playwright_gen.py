@@ -741,7 +741,7 @@ def test_the_home_is_named_and_allowed(tmp_path: Path, monkeypatch):
 
     context = SimpleNamespace(
         name="Frontend", description="", routes=["#cgu"], components=[], api_calls=[],
-        test_ids=[], controls=[], has_form=False, source_files=[], excerpts=[],
+        test_ids=[], controls=[], fields=[], has_form=False, source_files=[], excerpts=[],
     )
     spec = playwright_gen.generate_spec(
         context, story_id="US-060", story_title="T", scenario_id="US-060-SC-1",
@@ -809,7 +809,7 @@ class TestDeclaredCredentials:
 
         context = SimpleNamespace(
             name="F", description="", routes=["/"], components=[], api_calls=[],
-            test_ids=[], controls=[], has_form=True, source_files=[], excerpts=[],
+            test_ids=[], controls=[], fields=[], has_form=True, source_files=[], excerpts=[],
         )
         playwright_gen.generate_spec(
             context, story_id="US-070", story_title="T", scenario_id="US-070-SC-1",
