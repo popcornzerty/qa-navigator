@@ -607,6 +607,101 @@ def playwright_root(project: Project) -> Path:
 GENERATED_SUBDIR = "generated"
 
 
+def generate_backlog_for_feature(feature_id: str) -> None:
+    """Generate User Stories and Gherkin for one functional domain.
+
+    An analysis generates for the highest-scoring domains only, because each one costs
+    minutes of local inference. Splitting screens into their own domains made that cap
+    bite: eighteen were detected where one used to be, and fifteen were left with nothing.
+    This is the way to ask for a particular one — the login screen, say — without paying
+    for the seventeen others.
+    """
+    db = SessionLocal()
+    try:
+        feature = db.get(Feature, feature_id)
+        if not feature:
+            return
+        project = db.get(Project, feature.project_id)
+        if not project:
+            return
+
+        context = generation.build_context(feature, project.repository_path)
+        # Only this domain's untouched drafts: a story a human reviewed survives, and so
+        # does every other domain's backlog.
+        for story in db.scalars(
+            select(UserStory).where(
+                UserStory.feature_id == feature.id,
+                UserStory.origin == "generated",
+                UserStory.story_status == "draft",
+            )
+        ):
+            db.execute(delete(GherkinScenario).where(GherkinScenario.user_story_id == story.id))
+            db.execute(delete(AcceptanceCriterion).where(AcceptanceCriterion.user_story_id == story.id))
+            db.delete(story)
+        db.commit()
+
+        created: list[UserStory] = []
+        for draft in generation.generate_stories(context):
+            story = UserStory(
+                id=next_reference(db, UserStory, "US"),
+                project_id=project.id,
+                feature_id=feature.id,
+                feature_name=feature.name,
+                epic=draft.epic,
+                title=draft.title,
+                description=draft.description,
+                confidence=feature.confidence,
+                source_files=feature.source_files,
+                origin="generated",
+                story_status="draft",
+            )
+            db.add(story)
+            db.flush()
+            for index, text in enumerate(draft.acceptance_criteria, start=1):
+                db.add(
+                    AcceptanceCriterion(
+                        id=f"{story.id}-AC-{index:02d}",
+                        user_story_id=story.id,
+                        text=text,
+                        covered=False,
+                    )
+                )
+            created.append(story)
+        db.commit()
+
+        for story in created:
+            draft = generation.GeneratedStory(
+                title=story.title,
+                description=story.description,
+                epic=story.epic,
+                acceptance_criteria=[item.text for item in story.acceptance_criteria],
+            )
+            for index, item in enumerate(generation.generate_scenarios(context, draft), start=1):
+                db.add(
+                    GherkinScenario(
+                        id=f"{story.id}-SC-{index}",
+                        user_story_id=story.id,
+                        project_id=project.id,
+                        feature=story.feature_name,
+                        scenario=item.scenario,
+                        given=item.given,
+                        when=item.when,
+                        then=item.then,
+                        scenario_status="draft",
+                    )
+                )
+            db.commit()
+        logger.info("Generated %d stories for feature %s", len(created), feature.name)
+    except OllamaError as exc:
+        db.rollback()
+        logger.warning("Generation failed for feature %s: %s", feature_id, exc)
+    except Exception:
+        db.rollback()
+        logger.exception("Generation crashed for feature %s", feature_id)
+    finally:
+        db.close()
+
+
 def spec_directory(project: Project) -> Path:
     """Where generated specs are written: inside the analysed repository.
 

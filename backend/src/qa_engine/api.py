@@ -21,6 +21,7 @@ from qa_engine.repositories import (
 )
 from qa_engine.services import (
     default_jira_jql,
+    generate_backlog_for_feature,
     generate_playwright_for_scenario,
     import_jira_stories,
     queue_run,
@@ -580,6 +581,26 @@ def regenerate_test(
         )
     background_tasks.add_task(generate_playwright_for_scenario, test.gherkin_scenario_id)
     return schemas.JobRead(job_id=test.gherkin_scenario_id, status="queued", progress=0)
+
+
+@router.post(
+    "/features/{feature_id}/stories",
+    response_model=schemas.JobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def generate_feature_backlog(
+    feature_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)
+):
+    """Generate the User Stories and Gherkin of one domain.
+
+    An analysis only generates for the highest-scoring domains, since each costs minutes
+    of local inference. This asks for a named one without paying for the rest.
+    """
+    feature = db.get(models.Feature, feature_id)
+    if not feature:
+        raise HTTPException(status_code=404, detail="Feature not found")
+    background_tasks.add_task(generate_backlog_for_feature, feature_id)
+    return schemas.JobRead(job_id=feature_id, status="queued", progress=0)
 
 
 # --- runs ----------------------------------------------------------------------------
