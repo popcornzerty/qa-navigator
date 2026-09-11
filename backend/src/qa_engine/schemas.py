@@ -267,6 +267,10 @@ class PlaywrightTestRead(Wire):
     scenario: str
     file: str
     origin: TestOrigin
+    # What the test exercises, and what ran it. A repository's suite is wider than its
+    # browser tests, and a list that cannot say which is which is not an inventory.
+    kind: Literal["e2e", "backend"] = "e2e"
+    framework: str = "playwright"
     status: TestStatus
     last_run: datetime | None
     duration_ms: int
@@ -422,3 +426,51 @@ class JiraImportResult(Wire):
     updated: int
     story_ids: list[str]
     jql: str
+
+
+class TestSuiteRead(Wire):
+    """One file's worth of tests, as a standup reads it."""
+
+    kind: Literal["e2e", "backend"]
+    framework: str
+    suite: str
+    tests: int
+    passed: int
+    failed: int
+    skipped: int
+    not_run: int
+    duration_ms: int
+    last_run: datetime | None
+    origins: list[str]
+
+
+class TestTotalsRead(Wire):
+    suites: int
+    tests: int
+    passed: int
+    failed: int
+    skipped: int
+    not_run: int
+    duration_ms: int
+    # Null until something has run. Of the tests that did run, how many hold — a suite
+    # nobody has executed is absent from this rather than counted as a failure.
+    pass_rate: float | None
+
+
+class TestInventoryRead(Wire):
+    project_id: str
+    totals: TestTotalsRead
+    suites: list[TestSuiteRead]
+
+
+class ReportIngestionRead(Wire):
+    """What reading one JUnit report changed."""
+
+    kind: Literal["e2e", "backend"]
+    framework: str
+    matched: int
+    created: int
+    duration_ms: int
+    passed: int
+    failed: int
+    skipped: int

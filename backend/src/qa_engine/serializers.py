@@ -237,6 +237,8 @@ def test(row: models.PlaywrightTest, story_row: models.UserStory | None) -> sche
         scenario=row.scenario,
         file=row.file,
         origin=test_origin(row, story_row),
+        kind=row.kind or "e2e",
+        framework=row.framework or "playwright",
         status=row.test_status,
         last_run=row.last_run,
         duration_ms=row.duration_ms,

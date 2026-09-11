@@ -101,6 +101,11 @@ export interface TestResult {
  *  from; `discovered` means the repository already shipped with it. */
 export type TestOrigin = "code" | "jira" | "manual" | "discovered";
 
+/** What a test exercises. A repository's suite is wider than its browser tests — 1020
+ *  pytest next to 155 Playwright in the project this was built against — and a list that
+ *  cannot say which is which is not an inventory. */
+export type TestKind = "e2e" | "backend";
+
 export interface PlaywrightTest {
   id: string;
   projectId: string;
@@ -112,6 +117,9 @@ export interface PlaywrightTest {
   scenario: string;
   file: string;
   origin: TestOrigin;
+  kind: TestKind;
+  /** The runner that produced the verdict. For the reader's benefit only. */
+  framework: string;
   status: TestStatus;
   lastRun: string | null;
   durationMs: number;
@@ -284,4 +292,49 @@ export interface CreateProjectInput {
   jiraConnection: JiraConnection;
   jiraProject: string | null;
   aiProvider: AiProvider;
+}
+
+/** One file's worth of tests — the unit a standup reads a suite in. */
+export interface TestSuiteSummary {
+  kind: TestKind;
+  framework: string;
+  suite: string;
+  tests: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  notRun: number;
+  durationMs: number;
+  lastRun: string | null;
+  origins: string[];
+}
+
+export interface TestTotals {
+  suites: number;
+  tests: number;
+  passed: number;
+  failed: number;
+  skipped: number;
+  notRun: number;
+  durationMs: number;
+  /** Null until something has run. Of the tests that did run, how many hold — a suite
+   *  nobody has executed is absent from this rather than counted as a failure. */
+  passRate: number | null;
+}
+
+export interface TestInventory {
+  projectId: string;
+  totals: TestTotals;
+  suites: TestSuiteSummary[];
+}
+
+export interface ReportIngestion {
+  kind: TestKind;
+  framework: string;
+  matched: number;
+  created: number;
+  durationMs: number;
+  passed: number;
+  failed: number;
+  skipped: number;
 }

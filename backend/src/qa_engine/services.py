@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from dataclasses import dataclass
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,7 +19,7 @@ from pathlib import Path
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
-from qa_engine import execution, generation, jira, playwright_gen
+from qa_engine import execution, generation, jira, playwright_gen, reports
 from qa_engine.analyzer import extract_repository_metadata
 from qa_engine.config import settings
 from qa_engine.database import SessionLocal
@@ -1357,3 +1358,138 @@ def recover_interrupted_runs(db: Session) -> int:
     if stranded:
         logger.warning("Released %d test run(s) interrupted by a restart", len(stranded))
     return len(stranded)
+
+
+@dataclass
+class ReportIngestion:
+    """What reading one report changed."""
+
+    kind: str
+    framework: str
+    matched: int
+    created: int
+    duration_ms: int
+    counts: dict[str, int]
+
+
+def ingest_report(db: Session, project: Project, xml_text: str) -> ReportIngestion:
+    """Record what a project's own runner reported.
+
+    This is how the inventory covers a project the engine cannot drive itself. A pipeline
+    or a local run produces JUnit XML — pytest, Playwright, Jest, Vitest, Go and the rest
+    all emit it — and the verdicts land here without the engine executing anything.
+
+    A test the report names and the repository never showed is created rather than
+    dropped. A suite can live outside what static discovery reads, and refusing to record
+    a test because nothing had parsed its file would leave the inventory quietly short.
+    """
+    report = reports.parse(xml_text)
+    kind = reports.kind_of(report.tests)
+    framework = reports.framework_of(report.tests)
+    now = datetime.now(timezone.utc)
+
+    index = _test_index(db, project.id)
+    matched = 0
+    created = 0
+
+    for reported in report.tests:
+        row = _match_reported(index, reported)
+        if row is None:
+            row = PlaywrightTest(
+                id=next_reference(db, PlaywrightTest, "pw"),
+                project_id=project.id,
+                scenario=reported.name,
+                file=reported.file,
+                origin="discovered",
+                selector=reported.name,
+            )
+            db.add(row)
+            db.flush()
+            for key in _keys_of(reported.file, reported.name):
+                index[key] = row
+            created += 1
+        else:
+            matched += 1
+
+        row.kind = kind
+        row.framework = framework
+        row.test_status = reported.status
+        row.last_run = now
+        row.duration_ms = reported.duration_ms
+        row.result = {
+            "status": reported.status,
+            "executed_at": now.isoformat(),
+            "duration_ms": reported.duration_ms,
+            "error_message": reported.message,
+            "screenshot": None,
+            "trace": None,
+            "console_output": None,
+        }
+
+    db.commit()
+    for story_id in _stories_of(db, project.id):
+        _refresh_story_coverage(db, story_id)
+    db.commit()
+
+    logger.info(
+        "Report ingested for %s: %d matched, %d created, %s",
+        project.id,
+        matched,
+        created,
+        report.counts,
+    )
+    return ReportIngestion(
+        kind=kind,
+        framework=framework,
+        matched=matched,
+        created=created,
+        duration_ms=report.duration_ms,
+        counts=report.counts,
+    )
+
+
+def _keys_of(file: str, name: str) -> list[tuple[str, str]]:
+    """Every address under which a test can be recognised.
+
+    A runner reports the path it was invoked with, not the one the repository uses:
+    Playwright says `acces.spec.ts` for a file the engine recorded as
+    `frontend/e2e/acces.spec.ts`. Matching on the tail as well as the whole path is what
+    lets a report update the rows discovery already created, instead of duplicating them.
+    """
+    title = " ".join(name.split()).casefold()
+    path = file.replace("\\", "/").casefold().lstrip("./")
+    # The file is always part of the address. Matching on the title alone looked like a
+    # kindness — a suite that moved directory keeps its tests — and merged 17 of a
+    # thousand pytest tests into unrelated rows, because a function name like
+    # `test_validation` occurs in as many modules as you care to write.
+    return [(path, title), (path.rsplit("/", 1)[-1], title)]
+
+
+def _test_index(db: Session, project_id: str) -> dict[tuple[str, str], PlaywrightTest]:
+    index: dict[tuple[str, str], PlaywrightTest] = {}
+    rows = db.scalars(select(PlaywrightTest).where(PlaywrightTest.project_id == project_id))
+    for row in rows:
+        for key in _keys_of(row.file or "", row.selector or row.scenario or ""):
+            # First writer wins, so a precise address is never displaced by a vague one.
+            index.setdefault(key, row)
+    return index
+
+
+def _match_reported(index: dict, reported) -> PlaywrightTest | None:
+    for key in _keys_of(reported.file, reported.name):
+        found = index.get(key)
+        if found is not None:
+            return found
+    return None
+
+
+def _stories_of(db: Session, project_id: str) -> set[str]:
+    return {
+        story_id
+        for story_id in db.scalars(
+            select(PlaywrightTest.user_story_id).where(
+                PlaywrightTest.project_id == project_id,
+                PlaywrightTest.user_story_id.is_not(None),
+            )
+        )
+    }

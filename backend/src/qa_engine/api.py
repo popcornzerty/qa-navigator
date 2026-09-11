@@ -6,11 +6,11 @@ Route order matters: literal paths such as ``/analyses/current`` must be declare
 
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from qa_engine import jira, models, reporting, schemas, serializers
+from qa_engine import jira, models, reporting, reports, schemas, serializers, services
 from qa_engine.config import settings
 from qa_engine.database import get_db
 from qa_engine.repositories import (
@@ -35,6 +35,11 @@ router = APIRouter(prefix=settings.api_v1_prefix)
 
 
 # --- helpers -------------------------------------------------------------------------
+
+
+# A JUnit report of a thousand tests is about half a megabyte; this leaves room for a
+# suite an order of magnitude larger while refusing a file nobody meant to send.
+MAX_REPORT_BYTES = 20_000_000
 
 
 def project_or_404(project_id: str, db: Session) -> models.Project:
@@ -684,3 +689,59 @@ def get_dashboard(project_id: str | None = None, db: Session = Depends(get_db)):
     if project_id:
         project_or_404(project_id, db)
     return reporting.dashboard_summary(db, project_id)
+
+
+@router.get("/inventory", response_model=schemas.TestInventoryRead)
+def test_inventory(project_id: str | None = None, db: Session = Depends(get_db)):
+    """Every test the engine knows about, grouped by the file it lives in.
+
+    Reads what is stored and runs nothing, so it answers immediately whether or not the
+    suites are currently runnable — which is the point: the picture has to be available at
+    a standup, not fifteen minutes after someone starts a test run.
+    """
+    return reporting.test_inventory(db, project_id)
+
+
+@router.post(
+    "/projects/{project_id}/reports",
+    response_model=schemas.ReportIngestionRead,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_report(project_id: str, request: Request, db: Session = Depends(get_db)):
+    """Record the verdicts a project's own runner produced.
+
+    JUnit XML is what every runner already emits, so this covers a project's whole suite
+    without the engine having to drive pytest, Jest, Go and the rest. The same file works
+    whether it comes out of the pipeline or off a developer's machine.
+
+    The report is the request body rather than a form upload: a pipeline step is one
+    `curl --data-binary @report.xml`, with nothing to encode and no extra dependency.
+    """
+    project = project_or_404(project_id, db)
+
+    payload = await request.body()
+    if len(payload) > MAX_REPORT_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Rapport trop volumineux (max {MAX_REPORT_BYTES // 1_000_000} Mo).",
+        )
+    try:
+        xml_text = payload.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=422, detail="Le rapport n'est pas encodé en UTF-8.") from None
+
+    try:
+        outcome = services.ingest_report(db, project, xml_text)
+    except reports.ReportError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from None
+
+    return schemas.ReportIngestionRead(
+        kind=outcome.kind,
+        framework=outcome.framework,
+        matched=outcome.matched,
+        created=outcome.created,
+        duration_ms=outcome.duration_ms,
+        passed=outcome.counts.get("passed", 0),
+        failed=outcome.counts.get("failed", 0),
+        skipped=outcome.counts.get("skipped", 0),
+    )

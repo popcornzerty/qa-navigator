@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as CoverageRouteImport } from './routes/coverage'
 import { Route as GherkinRouteImport } from './routes/gherkin'
+import { Route as InventoryRouteImport } from './routes/inventory'
 import { Route as RunsRouteImport } from './routes/runs'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as AutomationIndexRouteImport } from './routes/automation.index'
@@ -36,6 +37,11 @@ const CoverageRoute = CoverageRouteImport.update({
 const GherkinRoute = GherkinRouteImport.update({
   id: '/gherkin',
   path: '/gherkin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const InventoryRoute = InventoryRouteImport.update({
+  id: '/inventory',
+  path: '/inventory',
   getParentRoute: () => rootRouteImport,
 } as any)
 const RunsRoute = RunsRouteImport.update({
@@ -94,6 +100,7 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/coverage': typeof CoverageRoute
   '/gherkin': typeof GherkinRoute
+  '/inventory': typeof InventoryRoute
   '/runs': typeof RunsRoute
   '/settings': typeof SettingsRoute
   '/automation/$testId': typeof AutomationTestIdRoute
@@ -109,6 +116,7 @@ export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/coverage': typeof CoverageRoute
   '/gherkin': typeof GherkinRoute
+  '/inventory': typeof InventoryRoute
   '/runs': typeof RunsRoute
   '/settings': typeof SettingsRoute
   '/automation/$testId': typeof AutomationTestIdRoute
@@ -125,6 +133,7 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/coverage': typeof CoverageRoute
   '/gherkin': typeof GherkinRoute
+  '/inventory': typeof InventoryRoute
   '/runs': typeof RunsRoute
   '/settings': typeof SettingsRoute
   '/automation/$testId': typeof AutomationTestIdRoute
@@ -142,6 +151,7 @@ export interface FileRouteTypes {
     | '/'
     | '/coverage'
     | '/gherkin'
+    | '/inventory'
     | '/runs'
     | '/settings'
     | '/automation/$testId'
@@ -157,6 +167,7 @@ export interface FileRouteTypes {
     | '/'
     | '/coverage'
     | '/gherkin'
+    | '/inventory'
     | '/runs'
     | '/settings'
     | '/automation/$testId'
@@ -172,6 +183,7 @@ export interface FileRouteTypes {
     | '/'
     | '/coverage'
     | '/gherkin'
+    | '/inventory'
     | '/runs'
     | '/settings'
     | '/automation/$testId'
@@ -188,6 +200,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   CoverageRoute: typeof CoverageRoute
   GherkinRoute: typeof GherkinRoute
+  InventoryRoute: typeof InventoryRoute
   RunsRoute: typeof RunsRoute
   SettingsRoute: typeof SettingsRoute
   AutomationTestIdRoute: typeof AutomationTestIdRoute
@@ -221,6 +234,13 @@ declare module '@tanstack/react-router' {
       path: '/gherkin'
       fullPath: '/gherkin'
       preLoaderRoute: typeof GherkinRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/inventory': {
+      id: '/inventory'
+      path: '/inventory'
+      fullPath: '/inventory'
+      preLoaderRoute: typeof InventoryRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/runs': {
@@ -300,6 +320,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   CoverageRoute: CoverageRoute,
   GherkinRoute: GherkinRoute,
+  InventoryRoute: InventoryRoute,
   RunsRoute: RunsRoute,
   SettingsRoute: SettingsRoute,
   AutomationTestIdRoute: AutomationTestIdRoute,

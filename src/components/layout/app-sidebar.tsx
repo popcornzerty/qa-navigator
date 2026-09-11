@@ -10,6 +10,7 @@ import { percent } from "../../lib/format";
 const NAV = [
   { to: "/", label: "Dashboard", testId: "nav-dashboard" },
   { to: "/projects", label: "Projects", testId: "nav-projects" },
+  { to: "/inventory", label: "État des lieux", testId: "nav-inventory" },
   { to: "/automation", label: "Automation", testId: "nav-automation" },
   { to: "/runs", label: "Executions", testId: "nav-runs" },
   { to: "/coverage", label: "Coverage", testId: "nav-coverage" },

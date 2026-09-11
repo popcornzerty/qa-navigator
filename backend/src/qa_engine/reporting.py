@@ -178,3 +178,104 @@ def dashboard_summary(db: Session, project_id: str | None) -> schemas.DashboardS
         coverage=report.coverage,
         activity=activity,
     )
+
+
+def _suite_of(row: models.PlaywrightTest) -> str:
+    """The file a test belongs to, which is the unit anyone reads a suite in.
+
+    Grouping by anything finer produces a wall of a thousand rows; by anything coarser,
+    a number nobody can act on. "Which file is red" is the question a standup asks.
+    """
+    return (row.file or "—").replace("\\", "/")
+
+
+def test_inventory(db: Session, project_id: str | None) -> schemas.TestInventoryRead:
+    """Every test the engine knows about, grouped so it can be read at a glance.
+
+    The point of this is to be presentable: what exists, what passes, what has never run,
+    split into the two families a team actually talks about — the browser tests and
+    everything else. It aggregates what is stored and runs nothing, so it answers in
+    milliseconds whether or not the suites are currently runnable.
+
+    A suite whose tests have never run is not a failing suite, and the two are kept
+    apart. Reporting "not run" as a problem would push a team to run everything before
+    every standup; reporting it as a pass would be a lie.
+    """
+    rows = _tests(db, project_id)
+
+    groups: dict[tuple[str, str, str], dict] = {}
+    for row in rows:
+        key = (row.kind or "e2e", row.framework or "playwright", _suite_of(row))
+        entry = groups.setdefault(
+            key,
+            {
+                "kind": key[0],
+                "framework": key[1],
+                "suite": key[2],
+                "tests": 0,
+                "passed": 0,
+                "failed": 0,
+                "skipped": 0,
+                "not_run": 0,
+                "duration_ms": 0,
+                "last_run": None,
+                "origins": set(),
+            },
+        )
+        entry["tests"] += 1
+        status = row.test_status if row.test_status in _COUNTED else "not_run"
+        entry[status] += 1
+        entry["duration_ms"] += row.duration_ms or 0
+        entry["origins"].add(row.origin or "discovered")
+        if row.last_run and (entry["last_run"] is None or row.last_run > entry["last_run"]):
+            entry["last_run"] = row.last_run
+
+    suites = [
+        schemas.TestSuiteRead(
+            kind=entry["kind"],
+            framework=entry["framework"],
+            suite=entry["suite"],
+            tests=entry["tests"],
+            passed=entry["passed"],
+            failed=entry["failed"],
+            skipped=entry["skipped"],
+            not_run=entry["not_run"],
+            duration_ms=entry["duration_ms"],
+            last_run=entry["last_run"],
+            origins=sorted(entry["origins"]),
+        )
+        # Red first, then never-run, then the rest: a standup reads the top of a list.
+        for entry in sorted(
+            groups.values(),
+            key=lambda item: (-item["failed"], -item["not_run"], item["suite"]),
+        )
+    ]
+
+    return schemas.TestInventoryRead(
+        project_id=project_id or "",
+        totals=_totals(suites),
+        suites=suites,
+    )
+
+
+_COUNTED = {"passed", "failed", "skipped", "not_run"}
+
+
+def _totals(suites: list[schemas.TestSuiteRead]) -> schemas.TestTotalsRead:
+    def add(field: str) -> int:
+        return sum(getattr(suite, field) for suite in suites)
+
+    executed = add("passed") + add("failed")
+    return schemas.TestTotalsRead(
+        suites=len(suites),
+        tests=add("tests"),
+        passed=add("passed"),
+        failed=add("failed"),
+        skipped=add("skipped"),
+        not_run=add("not_run"),
+        duration_ms=add("duration_ms"),
+        # Of the tests that actually ran, how many hold. A suite nobody has run yet is
+        # absent from this ratio rather than counted as a failure, which is why it is
+        # reported next to `not_run` and never on its own.
+        pass_rate=(add("passed") / executed * 100) if executed else None,
+    )

@@ -141,6 +141,12 @@ class PlaywrightTest(Base):
     file: Mapped[str] = mapped_column(Text)
     source: Mapped[str] = mapped_column(Text, default="")
     origin: Mapped[str] = mapped_column(String(20), default="generated")  # generated | discovered
+    # What the test exercises, and what produced it. The table was Playwright-only, so
+    # neither question had to be asked; a repository's real suite is wider than its browser
+    # tests — 1025 pytest next to 140 Playwright in the project this was built against —
+    # and an inventory that shows only one of them is not an inventory.
+    kind: Mapped[str] = mapped_column(String(20), default="e2e")  # e2e | backend
+    framework: Mapped[str] = mapped_column(String(30), default="playwright")
     # Selects this test inside its file. Discovered files hold many tests; the title is
     # used rather than the line number so an edit above it does not retarget the run.
     selector: Mapped[str | None] = mapped_column(Text, nullable=True)
