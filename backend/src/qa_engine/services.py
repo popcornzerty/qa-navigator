@@ -802,6 +802,7 @@ def generate_playwright_for_scenario(scenario_id: str) -> None:
                 gherkin_scenario_id=scenario.id,
             )
             db.add(existing)
+        _discard_superseded_spec(repository, existing.file, relative)
         existing.scenario = scenario.scenario
         existing.file = relative
         existing.working_directory = working_directory
@@ -934,6 +935,35 @@ def link_test_to_story(db: Session, test: PlaywrightTest, story_id: str | None) 
     for affected in {previous, story_id} - {None}:
         _refresh_story_coverage(db, affected)
     db.commit()
+
+
+def _discard_superseded_spec(repository: Path, previous: str | None, current: str) -> None:
+    """Remove the file a regeneration has just replaced under a different name.
+
+    The file name is derived from the scenario title, so renaming a scenario makes the
+    engine write a new file and abandon the old one. The abandoned copy keeps running and
+    keeps failing — "Ouvrir le formulaire de connexion" stayed red long after the scenario
+    it came from had been renamed, and reading the suite gave no way to tell it apart from
+    a real regression.
+
+    Only a file this engine wrote is removed, and the marker in its first line is what
+    proves it: a file someone wrote by hand, or moved into place, is left alone even if the
+    database points at it.
+    """
+    if not previous or previous == current:
+        return
+    abandoned = repository / previous
+    try:
+        if not abandoned.is_file():
+            return
+        with abandoned.open(encoding="utf-8") as handle:
+            if playwright_gen.GENERATED_MARKER not in handle.readline():
+                logger.info("Leaving %s alone: it is not this engine's output", previous)
+                return
+        abandoned.unlink()
+        logger.info("Removed %s, superseded by %s", previous, current)
+    except OSError:
+        logger.warning("Could not remove the superseded spec %s", previous, exc_info=True)
 
 
 def _detach_stale_generated_tests(db: Session, project_id: str) -> int:

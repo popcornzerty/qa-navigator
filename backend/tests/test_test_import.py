@@ -419,3 +419,52 @@ def test_an_imported_test_is_never_detached_by_the_renumbering(tmp_path: Path):
             assert db.get(PlaywrightTest, test_id).user_story_id == "US-022"
         finally:
             db.close()
+
+def test_a_renamed_scenario_does_not_leave_its_old_spec_running(tmp_path: Path):
+    """The file name comes from the scenario title, so renaming one makes the engine write
+    a new file and abandon the old. The abandoned copy kept running and kept failing, with
+    nothing to tell it apart from a real regression."""
+    from qa_engine.playwright_gen import GENERATED_MARKER
+    from qa_engine.services import _discard_superseded_spec
+
+    repo = tmp_path / "repo"
+    (repo / "e2e").mkdir(parents=True)
+    old = repo / "e2e" / "us-006-ouvrir-le-formulaire.spec.ts"
+    old.write_text(f"{GENERATED_MARKER}\ntest('x', async () => {{}});\n", encoding="utf-8")
+
+    _discard_superseded_spec(repo, "e2e/us-006-ouvrir-le-formulaire.spec.ts", "e2e/us-006-cgu.spec.ts")
+    assert not old.exists()
+
+
+def test_a_spec_the_engine_did_not_write_is_left_alone(tmp_path: Path):
+    """The marker in the first line is what proves ownership. A file someone wrote by hand
+    stays, even when the database points at it."""
+    from qa_engine.services import _discard_superseded_spec
+
+    repo = tmp_path / "repo"
+    (repo / "e2e").mkdir(parents=True)
+    handwritten = repo / "e2e" / "portefeuille.spec.ts"
+    handwritten.write_text("import { test } from '@playwright/test';\n", encoding="utf-8")
+
+    _discard_superseded_spec(repo, "e2e/portefeuille.spec.ts", "e2e/autre.spec.ts")
+    assert handwritten.exists()
+
+
+def test_rewriting_the_same_file_keeps_it(tmp_path: Path):
+    from qa_engine.playwright_gen import GENERATED_MARKER
+    from qa_engine.services import _discard_superseded_spec
+
+    repo = tmp_path / "repo"
+    (repo / "e2e").mkdir(parents=True)
+    same = repo / "e2e" / "us-006.spec.ts"
+    same.write_text(f"{GENERATED_MARKER}\n", encoding="utf-8")
+
+    _discard_superseded_spec(repo, "e2e/us-006.spec.ts", "e2e/us-006.spec.ts")
+    assert same.exists()
+
+
+def test_a_missing_previous_file_is_not_an_error(tmp_path: Path):
+    from qa_engine.services import _discard_superseded_spec
+
+    _discard_superseded_spec(tmp_path, "e2e/parti.spec.ts", "e2e/nouveau.spec.ts")
+    _discard_superseded_spec(tmp_path, None, "e2e/nouveau.spec.ts")
