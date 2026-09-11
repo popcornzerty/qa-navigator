@@ -108,6 +108,23 @@ LABELLED_CONTROL = re.compile(
     r"<(?P<tag>button|a)\b" + JSX_ATTRIBUTES + r">\s*(?P<label>[^<>{}]+?)\s*</(?P=tag)>",
     re.DOTALL,
 )
+# A control whose label is decided at render time:
+# `<button type="submit">{occupe ? "Vérification…" : "Se connecter"}</button>`.
+# LABELLED_CONTROL cannot see it — its label may hold no braces — so the submit button of
+# every form in the repository was missing from the evidence. The prompt then offered the
+# model no button to press, and it pressed the wrong one; when it guessed "Se connecter"
+# correctly, nothing could confirm the guess was a button rather than a link.
+#
+# The body is read for literals, and both branches of a ternary are kept: each is a name
+# the button really carries, at a different moment.
+EXPRESSION_CONTROL = re.compile(
+    r"<(?P<tag>button|a)\b"
+    + JSX_ATTRIBUTES
+    + r">(?P<body>(?:(?!</?(?:button|a)\b).)*?)</(?P=tag)>",
+    re.DOTALL,
+)
+BODY_LITERAL = re.compile(r"""['"]([^'"{}<>\n]{3,80})['"]""")
+
 ARIA_LABEL = re.compile(
     r"<(?P<tag>[a-z][\w-]*)\b(?P<attrs>(?:[^>{]|\{(?:[^{}]|\{[^{}]*\})*\})*?\baria-label\s*=\s*[\"']"
     r"(?P<label>[^\"']+)[\"'][^>]*)>"
@@ -339,6 +356,30 @@ def extract_controls(text: str, relative_path: str) -> list[DiscoveredSymbol]:
             label = " ".join(match.group("label").split())
             role = _role_of(match.group("tag"), match.group("attrs") or "")
             if not label or role is None:
+                continue
+            found.append(
+                DiscoveredSymbol(
+                    label,
+                    "control",
+                    relative_path,
+                    _line_number(text, match.start()),
+                    {"role": role},
+                )
+            )
+
+    # A label the markup decides at render time, read out of the expression that decides
+    # it. Only literals that read as copy are kept, so `{t('cart.submit')}` contributes a
+    # key nobody can see rather than a label — and is left out.
+    for match in EXPRESSION_CONTROL.finditer(text):
+        body = match.group("body")
+        if "{" not in body:
+            continue
+        role = _role_of(match.group("tag"), match.group("attrs") or "")
+        if role is None:
+            continue
+        for literal in BODY_LITERAL.findall(body):
+            label = " ".join(literal.split())
+            if not _is_copy(label):
                 continue
             found.append(
                 DiscoveredSymbol(

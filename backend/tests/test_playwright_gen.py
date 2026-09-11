@@ -649,14 +649,38 @@ class TestRoleIsCheckedAgainstTheCode:
         )
         assert accepted is not None
 
-    def test_a_label_the_analysis_never_saw_is_left_alone(self):
-        """Many real labels are computed at runtime; their absence is a limit of reading,
-        not evidence that they do not exist. Refusing them would reject correct code."""
-        accepted, _ = playwright_gen.validate_line(
+    def test_a_label_the_analysis_never_saw_is_refused(self):
+        """This reverses an earlier decision, and the evidence is what changed it.
+
+        Leaving unknown labels alone was meant to spare labels computed at runtime. What
+        it actually spared was invention: a click on a `link` named "Connexion" to reach a
+        login screen that was already open, and a `heading` named "Connexion" on a screen
+        with no heading at all. Each cost a timeout and then blamed the application.
+
+        The escape hatch it was protecting is still open, and wider than it was: a label
+        the code merely *displays* counts, which is how `{occupe ? "Vérification…" :
+        "Se connecter"}` stays reachable without any extractor seeing a button. What is
+        refused now is a label nothing in the analysed screen accounts for.
+        """
+        accepted, reason = playwright_gen.validate_line(
             "await page.getByRole('link', { name: 'Inconnu' }).click();",
             set(),
             None,
             self.CONTROLS,
+        )
+        assert accepted is None
+        assert reason is not None and "Inconnu" in reason
+
+    def test_a_label_the_code_only_displays_is_accepted(self):
+        """`<button>{occupe ? "Vérification…" : "Se connecter"}</button>`: no extractor
+        reads that as a button, but the string is in the copy and the button is real."""
+        accepted, _ = playwright_gen.validate_line(
+            "await page.getByRole('button', { name: 'Se connecter' }).click();",
+            set(),
+            None,
+            self.CONTROLS,
+            None,
+            ["Se connecter", "Vérification…"],
         )
         assert accepted is not None
 
@@ -905,3 +929,252 @@ def test_a_when_that_only_asserts_is_reported(tmp_path: Path, monkeypatch):
     )
     assert not spec.is_runnable
     assert any("aucune action" in item for item in spec.unresolved)
+
+
+def test_a_heading_the_application_never_shows_is_refused():
+    """A heading is named by its own text, so the copy index decides it.
+
+    `getByRole('heading', { name: 'Connexion' })` on a login screen whose only words are
+    "Terminal PEA" cost a five-second timeout and reported the product broken for a title
+    it never had.
+    """
+    texts = ["Terminal PEA", "Renseignez votre identifiant et votre mot de passe."]
+    line, reason = playwright_gen.validate_line(
+        "await expect(page.getByRole('heading', { name: 'Connexion' })).toBeVisible();",
+        set(),
+        texts=texts,
+    )
+    assert line is None
+    assert reason is not None and "Connexion" in reason
+
+
+def test_a_heading_the_application_does_show_is_kept():
+    texts = ["Terminal PEA", "Conditions générales d'utilisation"]
+    line, reason = playwright_gen.validate_line(
+        "await expect(page.getByRole('heading', "
+        "{ name: \"Conditions générales d'utilisation\" })).toBeVisible();",
+        set(),
+        texts=texts,
+    )
+    assert reason is None
+    assert line is not None
+
+
+def test_a_button_label_the_analysis_never_saw_is_refused():
+    line, reason = playwright_gen.validate_line(
+        "await page.getByRole('button', { name: 'Se connecter' }).click();",
+        set(),
+        texts=["Terminal PEA"],
+    )
+    assert line is None
+    assert reason is not None and "Se connecter" in reason
+
+
+def test_a_silent_analysis_refuses_nothing():
+    """No control and no copy is a limit of the reading, not a verdict on the screen."""
+    line, reason = playwright_gen.validate_line(
+        "await page.getByRole('button', { name: 'Se connecter' }).click();", set()
+    )
+    assert reason is None
+    assert line is not None
+
+
+def test_a_heading_is_held_to_the_whole_text_not_a_fragment():
+    """Containment let `{ name: 'Connexion' }` through on the strength of the error
+    message "Connexion impossible." Role locators are pinned with `exact: true`, so that
+    locator asks for a heading whose entire text is "Connexion" — a claim the copy of the
+    application does not support."""
+    line, reason = playwright_gen.validate_line(
+        "await expect(page.getByRole('heading', { name: 'Connexion' })).toBeVisible();",
+        set(),
+        texts=["Terminal PEA", "Connexion impossible."],
+    )
+    assert line is None
+    assert reason is not None and "Connexion" in reason
+
+
+def test_a_role_label_is_read_up_to_its_own_closing_quote():
+    """Reading to "any quote" cut `"Conditions générales d'utilisation"` at the
+    apostrophe, so the label checked was not the label written."""
+    label = "Conditions générales d'utilisation"
+    assert playwright_gen.role_calls(
+        f'page.getByRole("heading", {{ name: "{label}" }})'
+    ) == [("heading", label)]
+
+
+def test_a_heading_whose_apostrophe_survives_is_accepted():
+    label = "Conditions générales d'utilisation"
+    line, reason = playwright_gen.validate_line(
+        f'await expect(page.getByRole("heading", {{ name: "{label}" }})).toBeVisible();',
+        set(),
+        texts=[label, "Mentions légales"],
+    )
+    assert reason is None
+    assert line is not None
+
+class TestOneNavigationPerStep:
+    """Asked for "the user is on the login screen", the model clicked its way through
+    every link on it: À propos, CGU, Confidentialité — destinations that cannot all be
+    true, in a step that had already arrived with `goto('/')`."""
+
+    CONTROLS = [
+        {"role": "link", "name": "À propos", "file": "Login.tsx"},
+        {"role": "link", "name": "CGU", "file": "Login.tsx"},
+        {"role": "link", "name": "Confidentialité", "file": "Login.tsx"},
+        {"role": "button", "name": "Se connecter", "file": "Login.tsx"},
+    ]
+
+    def _run(self, monkeypatch, given_code):
+        monkeypatch.setattr(
+            playwright_gen.ollama,
+            "chat_json",
+            lambda *a, **k: {
+                "etapes": [
+                    {"index": 1, "code": given_code},
+                    {
+                        "index": 2,
+                        "code": ["await page.getByRole('button', { name: 'Se connecter' }).click();"],
+                    },
+                ]
+            },
+        )
+        context = playwright_gen.FeatureContext(
+            name="Authentification",
+            description="",
+            routes=["/"],
+            components=[],
+            api_calls=[],
+            test_ids=[],
+            controls=self.CONTROLS,
+            fields=[],
+            texts=["Se connecter", "À propos", "CGU", "Confidentialité"],
+            has_form=True,
+            source_files=["Login.tsx"],
+            excerpts=[],
+        )
+        spec = playwright_gen.generate_spec(
+            context,
+            story_id="US-008",
+            story_title="S'authentifier",
+            scenario_id="US-008-SC-1",
+            scenario_name="Soumettre un formulaire vide",
+            given=["L'utilisateur est sur l'écran de connexion"],
+            when=["Il clique sur le bouton soumettre"],
+            then=[],
+            base_url="http://localhost:5180",
+        )
+        # What the browser will actually run, TODO comments excluded.
+        runnable = [
+            line.strip()
+            for line in spec.source.splitlines()
+            if line.strip().startswith("await") or line.strip().startswith("//") is False
+        ]
+        return spec, [line for line in runnable if line.startswith("await page.")]
+
+    def test_the_arrival_is_kept_and_the_wandering_is_not(self, monkeypatch):
+        spec, runnable = self._run(
+            monkeypatch,
+            [
+                "await page.goto('/');",
+                "await page.getByRole('link', { name: 'À propos' }).click();",
+                "await page.getByRole('link', { name: 'CGU' }).click();",
+                "await page.getByRole('link', { name: 'Confidentialité' }).click();",
+            ],
+        )
+        assert "await page.goto('/');" in runnable
+        assert not [line for line in runnable if "getByRole('link'" in line]
+        # Each refusal is left in the file, naming itself.
+        assert spec.source.count("une seconde navigation") == 3
+
+    def test_a_step_that_navigates_once_keeps_its_navigation(self, monkeypatch):
+        _spec, runnable = self._run(
+            monkeypatch, ["await page.getByRole('link', { name: 'CGU' }).click();"]
+        )
+        assert any("name: 'CGU', exact: true }).click()" in line for line in runnable)
+
+    def test_acting_on_the_screen_is_not_a_second_navigation(self, monkeypatch):
+        """Only links and `goto` leave the screen. Pressing a button on it is the point."""
+        spec, runnable = self._run(monkeypatch, ["await page.goto('/');"])
+        assert "await page.goto('/');" in runnable
+        assert any("name: 'Se connecter', exact: true }).click()" in line for line in runnable)
+        assert "une seconde navigation" not in spec.source
+
+def test_a_fragment_assertion_keeps_substring_matching():
+    """`getByText('… mot de passe')` against "… mot de passe." differs by one full stop.
+    Pinned exact it could never resolve, and the test would report the application broken
+    over a period."""
+    line, reason = playwright_gen.validate_line(
+        "await expect(page.getByText('Renseignez votre identifiant et votre mot de passe'))"
+        ".toBeVisible();",
+        set(),
+        texts=["Renseignez votre identifiant et votre mot de passe."],
+    )
+    assert reason is None
+    assert "exact: true" not in line
+
+
+def test_a_whole_label_is_still_pinned():
+    """The ambiguity this exists for: "Confidentialité" matches its own link and every
+    paragraph containing the word, and strict mode then refuses the step."""
+    line, _reason = playwright_gen.validate_line(
+        "await expect(page.getByText('Confidentialité')).toBeVisible();",
+        set(),
+        texts=["Confidentialité", "Politique de confidentialité du service"],
+    )
+    assert "exact: true" in line
+
+
+def test_nothing_known_means_nothing_changes_about_pinning():
+    line, _reason = playwright_gen.validate_line(
+        "await expect(page.getByText('Confidentialité')).toBeVisible();", set()
+    )
+    assert "exact: true" in line
+
+def test_a_fragment_the_model_pinned_itself_is_unpinned():
+    """The model pins locators on its own, having seen the option in earlier output. The
+    pinning rule then has nothing left to add, and a fragment stays bound to a sentence it
+    is only part of — `'… mot de passe'` against "… mot de passe." never resolves."""
+    line, reason = playwright_gen.validate_line(
+        "await expect(page.getByText('Renseignez votre identifiant et votre mot de passe', "
+        "{ exact: true })).toBeVisible();",
+        set(),
+        texts=["Renseignez votre identifiant et votre mot de passe."],
+    )
+    assert reason is None
+    assert "exact: true" not in line
+
+
+def test_a_whole_label_the_model_pinned_itself_stays_pinned():
+    line, _reason = playwright_gen.validate_line(
+        "await expect(page.getByText('Confidentialité', { exact: true })).toBeVisible();",
+        set(),
+        texts=["Confidentialité", "Politique de confidentialité"],
+    )
+    assert "exact: true" in line
+
+def test_a_jest_dom_matcher_is_refused():
+    """A generated spec asserted `toHaveTextContent(...)`, which throws "is not a function"
+    at run time: the test reports red for a mistake in itself, and the reason is buried in
+    a stack trace."""
+    line, reason = playwright_gen.validate_line(
+        "await expect(page.getByTestId('total')).toHaveTextContent('42');", {"total"}
+    )
+    assert line is None
+    assert reason is not None and "jest-dom" in reason
+
+
+def test_the_playwright_spelling_of_the_same_assertion_passes():
+    line, reason = playwright_gen.validate_line(
+        "await expect(page.getByTestId('total')).toHaveText('42');", {"total"}
+    )
+    assert reason is None
+    assert line is not None
+
+
+def test_a_playwright_matcher_with_a_similar_name_is_untouched():
+    """`toBeFocused` is Playwright's; only jest-dom's `toHaveFocus` is refused."""
+    line, reason = playwright_gen.validate_line(
+        "await expect(page.getByTestId('champ')).toBeFocused();", {"champ"}
+    )
+    assert reason is None
+    assert line is not None

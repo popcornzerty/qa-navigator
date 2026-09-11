@@ -295,3 +295,127 @@ def test_a_test_cannot_be_attached_across_projects(tmp_path: Path):
 
         response = client.patch(f"{PREFIX}/tests/{test_id}/story", json={"storyId": "US-OTHER"})
         assert response.status_code == 422
+
+
+def test_a_generated_test_stops_claiming_a_scenario_that_changed_meaning(tmp_path: Path):
+    """Story ids are handed out in order, so a backlog that changes shape renumbers it.
+
+    A spec generated from "US-006-SC-1 — Ouvrir le formulaire de connexion" kept that id
+    after the next analysis gave it to a different scenario: the file tested one thing and
+    reported against another.
+    """
+    from qa_engine.database import SessionLocal
+    from qa_engine.models import GherkinScenario, PlaywrightTest, UserStory
+    from qa_engine.services import _detach_stale_generated_tests
+
+    repo = _repository(tmp_path, "renumbered")
+    with TestClient(app) as client:
+        project_id = _create_and_analyse(client, repo, "Renumbered")
+
+        db = SessionLocal()
+        try:
+            db.add(UserStory(id="US-020", project_id=project_id, title="Une exigence"))
+            db.add(
+                GherkinScenario(
+                    id="US-020-SC-1",
+                    user_story_id="US-020",
+                    project_id=project_id,
+                    feature="Domaine",
+                    scenario="Accéder aux conditions générales",
+                )
+            )
+            # Written from what that id used to mean.
+            db.add(
+                PlaywrightTest(
+                    id="gen-1",
+                    project_id=project_id,
+                    user_story_id="US-020",
+                    gherkin_scenario_id="US-020-SC-1",
+                    scenario="Ouvrir le formulaire de connexion",
+                    file="e2e/generated/us-020.spec.ts",
+                    origin="code",
+                )
+            )
+            # And one whose scenario was deleted outright.
+            db.add(
+                PlaywrightTest(
+                    id="gen-2",
+                    project_id=project_id,
+                    user_story_id="US-020",
+                    gherkin_scenario_id="US-999-SC-1",
+                    scenario="Se connecter avec succès",
+                    file="e2e/generated/us-999.spec.ts",
+                    origin="code",
+                )
+            )
+            db.commit()
+
+            assert _detach_stale_generated_tests(db, project_id) == 2
+            for test_id in ("gen-1", "gen-2"):
+                detached = db.get(PlaywrightTest, test_id)
+                assert detached.user_story_id is None
+                assert detached.gherkin_scenario_id is None
+        finally:
+            db.close()
+
+
+def test_a_generated_test_that_still_matches_its_scenario_is_left_alone(tmp_path: Path):
+    from qa_engine.database import SessionLocal
+    from qa_engine.models import GherkinScenario, PlaywrightTest, UserStory
+    from qa_engine.services import _detach_stale_generated_tests
+
+    repo = _repository(tmp_path, "unchanged")
+    with TestClient(app) as client:
+        project_id = _create_and_analyse(client, repo, "Unchanged")
+
+        db = SessionLocal()
+        try:
+            db.add(UserStory(id="US-021", project_id=project_id, title="Une exigence"))
+            db.add(
+                GherkinScenario(
+                    id="US-021-SC-1",
+                    user_story_id="US-021",
+                    project_id=project_id,
+                    feature="Domaine",
+                    scenario="Ouvrir le formulaire de connexion",
+                )
+            )
+            db.add(
+                PlaywrightTest(
+                    id="gen-3",
+                    project_id=project_id,
+                    user_story_id="US-021",
+                    gherkin_scenario_id="US-021-SC-1",
+                    scenario="Ouvrir le formulaire de connexion",
+                    file="e2e/generated/us-021.spec.ts",
+                    origin="code",
+                )
+            )
+            db.commit()
+
+            assert _detach_stale_generated_tests(db, project_id) == 0
+            assert db.get(PlaywrightTest, "gen-3").user_story_id == "US-021"
+        finally:
+            db.close()
+
+
+def test_an_imported_test_is_never_detached_by_the_renumbering(tmp_path: Path):
+    """A discovered test records the title its own file gives it, which has nothing to do
+    with a scenario. Comparing the two would detach every hand-made link."""
+    from qa_engine.database import SessionLocal
+    from qa_engine.models import PlaywrightTest
+    from qa_engine.services import _detach_stale_generated_tests, link_test_to_story
+
+    repo = _repository(tmp_path, "spared")
+    with TestClient(app) as client:
+        project_id = _create_and_analyse(client, repo, "Spared")
+        test_id = client.get(f"{PREFIX}/tests?project_id={project_id}").json()[0]["id"]
+
+        db = SessionLocal()
+        try:
+            _story(db, project_id, "US-022")
+            link_test_to_story(db, db.get(PlaywrightTest, test_id), "US-022")
+            assert _detach_stale_generated_tests(db, project_id) == 0
+            assert db.get(PlaywrightTest, test_id).user_story_id == "US-022"
+        finally:
+            db.close()

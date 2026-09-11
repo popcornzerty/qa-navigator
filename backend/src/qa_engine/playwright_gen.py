@@ -35,6 +35,18 @@ FORBIDDEN = re.compile(
 )
 TESTID_CALL = re.compile(r"getByTestId\(\s*['\"]([^'\"]+)['\"]\s*\)")
 
+# Matchers that belong to jest-dom, not to Playwright. A generated spec asserted
+# `toHaveTextContent(...)`, which throws "is not a function" at run time: the test reports
+# red for a mistake in itself, and the reason is buried in a stack trace. They read as
+# plausible English, so the model reaches for them; each has a Playwright equivalent.
+# Each of these is jest-dom's spelling of something Playwright names differently
+# (`toHaveFocus` is `toBeFocused`, `toHaveTextContent` is `toHaveText`) or does not have.
+JEST_DOM_MATCHER = re.compile(
+    r"\.(?P<name>toHaveTextContent|toBeInTheDocument|toHaveStyle|toHaveFocus"
+    r"|toBeEmptyDOMElement|toContainElement|toHaveDisplayValue|toHaveFormValues"
+    r"|toBeRequired|toBePartiallyChecked)\s*\("
+)
+
 # Assertions and page actions must be awaited. Locator declarations (`const row = page…`)
 # must not be, so they are excluded.
 NEEDS_AWAIT = re.compile(r"^(?:expect\(|page\.)")
@@ -56,10 +68,30 @@ TEXT_LOCATOR = re.compile(
 # Text a line claims the application displays.
 TEXT_ASSERTION = re.compile(r"""(?:getByText|toHaveText|toContainText)\s*\(\s*['"`](?P<value>[^'"`]+)""")
 
-ROLE_CALL = re.compile(r"""getByRole\s*\(\s*['"`](?P<role>[^'"`]+)['"`]\s*,\s*{[^}]*\bname\s*:\s*['"`](?P<name>[^'"`]+)""")
+# The closing quote has to be the one that opened the string. Reading up to "any quote"
+# cut `"Conditions générales d'utilisation"` at the apostrophe, so the label checked was
+# not the label written — harmless while nothing was refused on it, wrong the moment
+# something is.
+ROLE_CALL = re.compile(
+    r"""getByRole\s*\(\s*(?P<rq>['"`])(?P<role>(?:\\.|(?!(?P=rq))[^\\])*)(?P=rq)"""
+    r"""\s*,\s*\{[^}]*\bname\s*:\s*(?P<nq>['"`])(?P<name>(?:\\.|(?!(?P=nq))[^\\])*)(?P=nq)"""
+)
+
+
+def role_calls(line: str) -> list[tuple[str, str]]:
+    """Every `(role, name)` a line asks for, with the label read in full."""
+    return [(match.group("role"), match.group("name")) for match in ROLE_CALL.finditer(line)]
+
 
 ROLE_LOCATOR = re.compile(
     r"\bgetByRole\(\s*(['\"`])[^'\"`]+\1\s*,\s*\{(?![^}]*\bexact\b)[^}]*\bname\s*:[^}]*(?=\})"
+)
+
+# A `getByText` the model pinned by itself, so there was nothing left for the pinning rule
+# to add and a fragment stayed bound to a sentence it is only part of.
+ALREADY_PINNED_TEXT = re.compile(
+    r"\bgetByText\(\s*(?P<quote>['\"`])(?P<value>(?:\\.|(?!(?P=quote))[^\\])*)(?P=quote)"
+    r"\s*,\s*\{[^}]*\bexact\s*:\s*true[^}]*\}\s*\)"
 )
 
 # A quoted path still holding a route parameter: `/projects/$projectId/analysis`,
@@ -271,13 +303,52 @@ def ungrounded_text(line: str, texts: list[str]) -> str | None:
     """
     if not texts:
         return None
-    lowered = [item.casefold() for item in texts]
+    lowered = [" ".join(item.split()).casefold() for item in texts]
+
     for asserted in TEXT_ASSERTION.findall(line):
         needle = " ".join(asserted.split()).casefold()
         if len(needle) < 3:
             continue
         if not any(needle in item for item in lowered):
             return f"« {asserted} » ne figure dans aucun texte du code analysé"
+    return None
+
+
+def ungrounded_label(line: str, controls: list[dict], texts: list[str]) -> str | None:
+    """Name a `getByRole` label the analysed screen has nothing to offer for.
+
+    A screen with no heading at all produced `getByRole('heading', { name: 'Connexion' })`,
+    and a login screen already open at `/` produced a click on a `link` named "Connexion"
+    to reach itself. Both cost a timeout and then blamed the application for a label it
+    never had.
+
+    The label must be a whole one: an element the analysis saw, or a whole string the code
+    displays. Both indexes are consulted because a label reaches the page by two routes.
+    "Se connecter" is written as `{occupe ? "Vérification…" : "Se connecter"}` — no
+    extractor reads that as a button, but the string itself is right there in the copy, and
+    the button is real. "Connexion" is in neither, and was invented.
+
+    Whole, not a fragment: every role locator is pinned with `exact: true`, so
+    `{ name: 'Connexion' }` asks for an element whose entire name is "Connexion". Accepting
+    it because the error message "Connexion impossible." contains the word would be
+    answering a different question from the one the locator asks.
+
+    The price is a label built by interpolation — `<button>{item.label}</button>` — which
+    this cannot see and will refuse. That is paid in a `TODO` comment naming what is
+    missing, not in a red test asserting something untrue, and the analysis has to have
+    spoken at all before anything is refused.
+    """
+    if not texts and not controls:
+        return None
+    known = {" ".join(item["name"].split()).casefold() for item in controls}
+    known |= {" ".join(item.split()).casefold() for item in texts}
+
+    for _role, name in role_calls(line):
+        needle = " ".join(name.split()).casefold()
+        if len(needle) < 3:
+            continue
+        if needle not in known:
+            return f"« {name} » ne correspond à aucun élément relevé sur cet écran"
     return None
 
 
@@ -334,6 +405,13 @@ def validate_line(
             if path not in allowed_routes:
                 return None, f"« {path} » n'est pas une adresse connue de l'application"
 
+    borrowed = JEST_DOM_MATCHER.search(candidate)
+    if borrowed:
+        return None, (
+            f"« {borrowed.group('name')} » appartient à jest-dom, pas à Playwright : "
+            "l'assertion lèverait « is not a function »"
+        )
+
     for test_id in TESTID_CALL.findall(candidate):
         if test_id not in known_test_ids:
             return None, f'data-testid "{test_id}" introuvable dans le code analysé'
@@ -348,11 +426,15 @@ def validate_line(
     if missing:
         return None, missing
 
+    unknown = ungrounded_label(candidate, controls or [], texts or [])
+    if unknown:
+        return None, unknown
+
     conflict = role_conflict(candidate, controls or [])
     if conflict:
         return None, conflict
 
-    candidate = anchor_text_locators(candidate)
+    candidate = anchor_text_locators(candidate, texts)
 
     # An un-awaited `expect(...)` returns a promise nobody resolves: it asserts nothing and
     # the test still reports green. The intent is unambiguous, so repair rather than reject.
@@ -364,14 +446,13 @@ def validate_line(
 def role_conflict(line: str, controls: list[dict]) -> str | None:
     """Reason to refuse a `getByRole` the analysed code contradicts.
 
-    Only a *contradiction* is refused: the label exists, and never under the role asked
+    This one refuses a *contradiction*: the label exists, and never under the role asked
     for. Asking for a role an element does not have finds nothing, and Playwright waits
     out the whole timeout before saying so — thirty seconds to learn that a `<button>`
     was called a `link`.
 
-    A label the analysis never saw is not refused. Plenty of real labels are computed at
-    runtime (`<button>{item.label}</button>`), and their absence here is a limit of static
-    reading, not evidence that they do not exist. Refusing them would reject correct code.
+    Whether the label exists at all is `ungrounded_label`'s question, asked just before
+    this one and against a wider index.
     """
     if not controls:
         return None
@@ -379,7 +460,7 @@ def role_conflict(line: str, controls: list[dict]) -> str | None:
     for item in controls:
         known.setdefault(item["name"], set()).add(item["role"])
 
-    for role, name in ROLE_CALL.findall(line):
+    for role, name in role_calls(line):
         roles = known.get(name)
         if roles and role not in roles:
             expected = ", ".join(f"'{value}'" for value in sorted(roles))
@@ -390,14 +471,43 @@ def role_conflict(line: str, controls: list[dict]) -> str | None:
     return None
 
 
-def anchor_text_locators(line: str) -> str:
+def anchor_text_locators(line: str, texts: list[str] | None = None) -> str:
     """Pin text-based locators to the exact label they were written for.
 
     Playwright matches text by substring, so a short label resolves to every element that
     merely contains it and strict mode then refuses the step. This is the failure mode of
     any repository without `data-testid`, where text is the only handle available.
+
+    A locator holding only *part* of a known sentence is left matching by substring, which
+    is the only way it can match at all. `getByText('Renseignez votre identifiant et votre
+    mot de passe')` against the message "Renseignez votre identifiant et votre mot de
+    passe." differs by one full stop; pinned exact, it could never resolve, and the test
+    would report the application broken over a period. Fragments are accepted upstream —
+    a test may assert part of a sentence — so pinning them here contradicted that.
     """
-    line = TEXT_LOCATOR.sub(lambda match: f"{match.group(0)}, {{ exact: true }}", line)
+    known = {" ".join(item.split()).casefold() for item in (texts or [])}
+
+    def whole(value: str) -> bool:
+        return " ".join(value.split()).casefold() in known
+
+    def pin(match: re.Match[str]) -> str:
+        quoted = match.group(0)
+        if known and "getByText" in quoted:
+            value = quoted[quoted.index("(") + 1 :].strip().strip("'\"`")
+            if not whole(value):
+                return quoted
+        return f"{quoted}, {{ exact: true }}"
+
+    line = TEXT_LOCATOR.sub(pin, line)
+
+    # The model pins locators itself, having seen the option in earlier output. Then the
+    # rule above never runs — there is nothing left to add — and a fragment stays pinned
+    # to a sentence it is only part of. Unpin it.
+    if known:
+        line = ALREADY_PINNED_TEXT.sub(
+            lambda match: match.group(0) if whole(match.group("value")) else f"getByText({match.group('quote')}{match.group('value')}{match.group('quote')})",
+            line,
+        )
     # The match stops before the closing brace, which carries its own spacing; trimming
     # keeps the result readable, since this is code someone will read.
     return ROLE_LOCATOR.sub(lambda match: f"{match.group(0).rstrip()}, exact: true ", line)
@@ -427,7 +537,13 @@ def _screens_block(controls: list[dict], fields: list[dict]) -> str:
 
     lines = [
         "Éléments relevés dans le code, groupés par fichier. Un scénario se déroule sur "
-        "UN écran : prends les éléments d'un seul fichier, ne les mélange pas."
+        "UN écran : prends les éléments d'un seul fichier, ne les mélange pas.",
+        # Asked where the user *is*, the model clicked its way through every link on the
+        # screen to get there — including the four legal links, whose destinations are
+        # mutually exclusive. Being somewhere is not an action.
+        "Un « Given » qui dit où se trouve l'utilisateur se traduit par page.goto(...) et "
+        "rien d'autre : on n'y arrive pas en cliquant. Ne clique que ce que l'étape "
+        "demande explicitement.",
     ]
     # Richest first: the screens a scenario is most likely to be about.
     ordered = sorted(
@@ -569,6 +685,35 @@ def contradictory_url_assertions(lines: list[str]) -> list[str]:
     return problems
 
 
+def _navigates(line: str, controls: list[dict]) -> bool:
+    """Whether a line leaves the screen the step is standing on.
+
+    A `goto` obviously does. A click on a `link` does too — that is what a link is for —
+    and the analysis says which labels are links.
+    """
+    if GOTO_CALL.search(line):
+        return True
+    links = {" ".join(item["name"].split()).casefold() for item in controls if item["role"] == "link"}
+    if ".click()" not in line:
+        return False
+    return any(" ".join(name.split()).casefold() in links for _role, name in role_calls(line))
+
+
+def second_navigation(line: str) -> str:
+    """Why a step gets one navigation and no more.
+
+    Asked for "the user is on the login screen", a model that could not express *being*
+    somewhere clicked its way through every link on it: À propos, then CGU, then
+    Confidentialité, then Mentions légales — four destinations that cannot all be true, in
+    a step that had already arrived with `goto('/')`. A step describes one situation or one
+    act; a second navigation inside it either undoes the first or was never asked for.
+
+    The first navigation is kept and the rest become visible TODOs, which is the order that
+    matches the Gherkin: a Given arrives, a When acts.
+    """
+    return "l'étape a déjà navigué ; une seconde navigation quitterait l'écran décrit"
+
+
 def _render_steps(
     steps: list[tuple[str, str]],
     known_test_ids: set[str],
@@ -600,11 +745,15 @@ def _render_steps(
         body.append(f'    await test.step("{label}", async () => {{')
         accepted: list[str] = []
         executable = 0
+        navigated = False
         for line in by_index.get(index, []):
             valid, reason = validate_line(
                 line, known_test_ids, allowed_routes, controls, secrets, texts
             )
+            if valid and navigated and _navigates(valid, controls):
+                valid, reason = None, second_navigation(valid)
             if valid:
+                navigated = navigated or _navigates(valid, controls)
                 accepted.append(valid)
                 executable += 1
             elif reason and reason != "ligne vide":

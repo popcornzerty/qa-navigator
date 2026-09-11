@@ -515,6 +515,11 @@ def run_analysis(analysis_id: str) -> None:
 
         generation_error = _generate_backlog(db, project, writer)
 
+        detached = _detach_stale_generated_tests(db, project.id)
+        if detached:
+            logger.info("%d generated tests no longer match their scenario", detached)
+            summary["stale_generated_tests"] = detached
+
         summary["stack"] = stack
         summary["features_detected"] = len(discovered)
         if generation_error:
@@ -929,6 +934,47 @@ def link_test_to_story(db: Session, test: PlaywrightTest, story_id: str | None) 
     for affected in {previous, story_id} - {None}:
         _refresh_story_coverage(db, affected)
     db.commit()
+
+
+def _detach_stale_generated_tests(db: Session, project_id: str) -> int:
+    """Stop a generated test from claiming a requirement that is no longer the one it was
+    written for.
+
+    Story ids are handed out in order at each analysis, so a backlog that changes shape
+    renumbers it. A spec generated from "US-006-SC-1 — Ouvrir le formulaire de connexion"
+    kept that id after the next analysis gave it to "Accéder à la page des conditions
+    générales d'utilisation": the file tested one thing and reported against another. The
+    coverage of a requirement nobody had verified was being decided by a test belonging to
+    a requirement that no longer existed.
+
+    A generated test records the scenario title it was written from, so the mismatch is
+    readable: the id is gone, or it now names something else. Either way the link is
+    false and is removed. The file is left on disk — it is still a test someone can read
+    and rerun — but it claims nothing until it is regenerated or linked by hand.
+    """
+    stale: list[PlaywrightTest] = []
+    tests = db.scalars(
+        select(PlaywrightTest).where(
+            PlaywrightTest.project_id == project_id,
+            PlaywrightTest.origin != "discovered",
+            PlaywrightTest.gherkin_scenario_id.is_not(None),
+        )
+    )
+    for test in tests:
+        scenario = db.get(GherkinScenario, test.gherkin_scenario_id)
+        if scenario is None or scenario.scenario.strip() != test.scenario.strip():
+            stale.append(test)
+
+    affected = {test.user_story_id for test in stale if test.user_story_id}
+    for test in stale:
+        test.user_story_id = None
+        test.gherkin_scenario_id = None
+    db.commit()
+
+    for story_id in affected:
+        _refresh_story_coverage(db, story_id)
+    db.commit()
+    return len(stale)
 
 
 def _refresh_story_coverage(db: Session, story_id: str) -> None:

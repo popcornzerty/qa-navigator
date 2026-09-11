@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from qa_engine import analyzer
 from qa_engine.analyzer import extract_repository_metadata, extract_symbols
 from qa_engine.features import group_symbols
 
@@ -418,3 +419,41 @@ class TestHeadings:
 
     def test_a_computed_heading_states_nothing(self):
         assert self._controls("<h1>{titre}</h1>") == set()
+
+def test_a_button_labelled_by_an_expression_is_found():
+    """`<button type="submit">{occupe ? "Vérification…" : "Se connecter"}</button>`.
+
+    The submit button of every form in the repository was missing from the evidence, so
+    the prompt offered no button to press and the model pressed the wrong one. Both
+    branches are kept: each is a name the button really carries, at a different moment.
+    """
+    source = """
+      <form onSubmit={soumettre}>
+        <button className="login-valider" type="submit" disabled={occupe}>
+          {occupe ? <span className="rouet" aria-hidden /> : null}
+          {occupe ? "Vérification…" : "Se connecter"}
+        </button>
+      </form>
+    """
+    found = {
+        (symbol.metadata["role"], symbol.name)
+        for symbol in analyzer.extract_controls(source, "Login.tsx")
+    }
+    assert ("button", "Se connecter") in found
+    assert ("button", "Vérification…") in found
+
+
+def test_a_translation_key_is_not_mistaken_for_a_label():
+    """`{t('cart.submit')}` contributes a key nobody can see, not a label."""
+    source = '<button type="submit">{t(\'cart.submit\')}</button>'
+    names = {symbol.name for symbol in analyzer.extract_controls(source, "Cart.tsx")}
+    assert "cart.submit" not in names
+
+
+def test_a_literal_label_is_still_read_the_plain_way():
+    source = "<button onClick={close}>Fermer</button>"
+    found = {
+        (symbol.metadata["role"], symbol.name)
+        for symbol in analyzer.extract_controls(source, "Panel.tsx")
+    }
+    assert ("button", "Fermer") in found
