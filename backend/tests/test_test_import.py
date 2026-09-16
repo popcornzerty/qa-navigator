@@ -468,3 +468,61 @@ def test_a_missing_previous_file_is_not_an_error(tmp_path: Path):
 
     _discard_superseded_spec(tmp_path, "e2e/parti.spec.ts", "e2e/nouveau.spec.ts")
     _discard_superseded_spec(tmp_path, None, "e2e/nouveau.spec.ts")
+
+
+def test_a_generated_spec_deleted_from_the_repository_leaves_the_inventory(tmp_path: Path):
+    """Terminal PEA removed its whole `e2e/generated/` folder. The rows stayed: tests the
+    inventory kept listing, one still reported as passing, pointing at files nobody could
+    open or run."""
+    from qa_engine.database import SessionLocal
+    from qa_engine.models import GherkinScenario, PlaywrightTest, TestRun, UserStory
+
+    repo = _repository(tmp_path, "vanished")
+    spec = repo / "frontend" / "e2e" / "generated" / "us-030.spec.ts"
+    spec.parent.mkdir(parents=True)
+    spec.write_text("// generated\n", encoding="utf-8")
+
+    with TestClient(app) as client:
+        project_id = _create_and_analyse(client, repo, "Vanished")
+
+        db = SessionLocal()
+        try:
+            db.add(UserStory(id="US-030", project_id=project_id, title="Une exigence"))
+            db.add(
+                GherkinScenario(
+                    id="US-030-SC-1", user_story_id="US-030", project_id=project_id,
+                    feature="Domaine", scenario="Ouvrir la page", given=["g"], when=["w"],
+                    then=["t"], scenario_status="automated",
+                )
+            )
+            db.add(
+                PlaywrightTest(
+                    id="gen-30", project_id=project_id, user_story_id="US-030",
+                    gherkin_scenario_id="US-030-SC-1", scenario="Ouvrir la page",
+                    file="frontend/e2e/generated/us-030.spec.ts", origin="code",
+                    test_status="passed",
+                )
+            )
+            db.add(TestRun(id="run-30", test_id="gen-30", project_id=project_id,
+                           scenario="Ouvrir la page", file="frontend/e2e/generated/us-030.spec.ts",
+                           origin="code", run_status="passed"))
+            db.commit()
+        finally:
+            db.close()
+
+        # Still there: a re-analysis keeps it.
+        client.post(f"{PREFIX}/analyses", json={"project_id": project_id})
+        assert any(t["id"] == "gen-30" for t in client.get(f"{PREFIX}/tests?project_id={project_id}").json())
+
+        spec.unlink()
+        client.post(f"{PREFIX}/analyses", json={"project_id": project_id})
+
+        assert not any(t["id"] == "gen-30" for t in client.get(f"{PREFIX}/tests?project_id={project_id}").json())
+        db = SessionLocal()
+        try:
+            assert db.get(TestRun, "run-30") is None
+            # The requirement and its scenario stay; the scenario is no longer automated.
+            assert db.get(UserStory, "US-030") is not None
+            assert db.get(GherkinScenario, "US-030-SC-1").scenario_status == "valid"
+        finally:
+            db.close()

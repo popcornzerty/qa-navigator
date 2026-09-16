@@ -163,7 +163,7 @@ def extract_tests(text: str, relative_path: str) -> list[DiscoveredTest]:
             described = DESCRIBE_CALL.search(line)
             if described:
                 stack.append((described.group("title"), depth))
-        elif test_match:
+        elif test_match and not _is_template_title(test_match):
             results.append(
                 DiscoveredTest(
                     file=relative_path,
@@ -179,6 +179,18 @@ def extract_tests(text: str, relative_path: str) -> list[DiscoveredTest]:
             stack.pop()
 
     return results
+
+
+def _is_template_title(match: re.Match[str]) -> bool:
+    """A title built at run time: `` test(`« ${doc.court} » est un lien`, …) `` in a loop.
+
+    Reading the file shows one test where Playwright runs one per iteration, under titles
+    that only exist once the loop has run. Registered as written, it became a row that
+    could never be selected — `--grep` for `${doc.court}` matches nothing — and so never
+    had a verdict, while the real tests arrived beside it from the JUnit report. The report
+    is the only source that knows their names; reading the file does not pretend to.
+    """
+    return match.group("quote") == "`" and "${" in match.group("title")
 
 
 def find_config(repository_root: Path, spec_relative: str) -> Path | None:

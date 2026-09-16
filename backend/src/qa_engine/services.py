@@ -353,7 +353,7 @@ def import_existing_tests(db: Session, project: Project) -> tuple[int, int]:
             select(PlaywrightTest).where(
                 PlaywrightTest.project_id == project.id,
                 PlaywrightTest.origin == "discovered",
-                PlaywrightTest.source != "report",
+                PlaywrightTest.recorded_from != "report",
             )
         )
     }
@@ -519,6 +519,11 @@ def run_analysis(analysis_id: str) -> None:
         writer.complete("features", detail)
 
         generation_error = _generate_backlog(db, project, writer)
+
+        forgotten = _forget_vanished_generated_specs(db, project)
+        if forgotten:
+            logger.info("%d generated specs no longer exist in the repository", forgotten)
+            summary["vanished_generated_tests"] = forgotten
 
         detached = _detach_stale_generated_tests(db, project.id)
         if detached:
@@ -971,6 +976,68 @@ def _discard_superseded_spec(repository: Path, previous: str | None, current: st
         logger.warning("Could not remove the superseded spec %s", previous, exc_info=True)
 
 
+def _forget_vanished_generated_specs(db: Session, project: Project) -> int:
+    """Remove the generated tests whose spec file is no longer in the repository.
+
+    A generated spec is written into the analysed repository, where its owner is free to
+    delete it — Terminal PEA removed its whole `e2e/generated/` folder. The rows stayed:
+    four tests the inventory kept listing, one still reported as passing, pointing at files
+    nobody could open or run. Imported tests were already reconciled against the
+    repository at each analysis; generated ones never were.
+
+    Their execution history goes with them, since it describes a file that is gone. A
+    scenario marked `automated` because of such a spec is no longer automated: it goes back
+    to `valid` when it is complete, `draft` otherwise, and its story's coverage is
+    recomputed. The scenario and the story themselves are kept — deleting a spec does not
+    withdraw the requirement.
+    """
+    root = Path(project.repository_path)
+    if not root.is_dir():
+        # An unreachable repository says nothing about which files exist in it.
+        return 0
+
+    vanished = [
+        test
+        for test in db.scalars(
+            select(PlaywrightTest).where(
+                PlaywrightTest.project_id == project.id,
+                PlaywrightTest.origin != "discovered",
+            )
+        )
+        if test.file and not (root / test.file).is_file()
+    ]
+    if not vanished:
+        return 0
+
+    stories = {test.user_story_id for test in vanished if test.user_story_id}
+    scenario_ids = {test.gherkin_scenario_id for test in vanished if test.gherkin_scenario_id}
+    ids = [test.id for test in vanished]
+
+    db.execute(delete(TestRun).where(TestRun.test_id.in_(ids)))
+    for test in vanished:
+        db.delete(test)
+    db.flush()
+
+    still_automated = set(
+        db.scalars(
+            select(PlaywrightTest.gherkin_scenario_id).where(
+                PlaywrightTest.gherkin_scenario_id.in_(scenario_ids)
+            )
+        )
+    )
+    for scenario_id in scenario_ids - still_automated:
+        scenario = db.get(GherkinScenario, scenario_id)
+        if scenario is not None and scenario.scenario_status == "automated":
+            complete = bool(scenario.given) and bool(scenario.when) and bool(scenario.then)
+            scenario.scenario_status = "valid" if complete else "draft"
+    db.commit()
+
+    for story_id in stories:
+        _refresh_story_coverage(db, story_id)
+    db.commit()
+    return len(vanished)
+
+
 def _detach_stale_generated_tests(db: Session, project_id: str) -> int:
     """Stop a generated test from claiming a requirement that is no longer the one it was
     written for.
@@ -1406,7 +1473,7 @@ def ingest_report(db: Session, project: Project, xml_text: str) -> ReportIngesti
                 file=reported.file,
                 origin="discovered",
                 selector=reported.name,
-                source="report",
+                recorded_from="report",
             )
             db.add(row)
             db.flush()

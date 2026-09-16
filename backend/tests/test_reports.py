@@ -307,3 +307,23 @@ def test_a_reanalysis_still_drops_a_spec_removed_from_the_repository(tmp_path: P
         tests = client.get(f"{PREFIX}/tests?project_id={project_id}").json()
         assert {t["kind"] for t in tests} == {"backend"}
         assert len(tests) == 4
+
+
+def test_a_report_row_keeps_its_provenance_apart_from_spec_code(tmp_path: Path):
+    """`source` holds a generated spec's code. A second `source` declared for provenance
+    silently replaced the first, so one column carried both "report" and spec text."""
+    from qa_engine.database import SessionLocal
+    from qa_engine.models import PlaywrightTest
+
+    repo = _repository(tmp_path, "provenance")
+    with TestClient(app) as client:
+        project_id = _analysed(client, repo, "Provenance")
+        client.post(f"{PREFIX}/projects/{project_id}/reports", content=PYTEST_REPORT)
+
+    db = SessionLocal()
+    try:
+        rows = list(db.query(PlaywrightTest).filter_by(project_id=project_id, kind="backend"))
+        assert rows and all(row.recorded_from == "report" for row in rows)
+        assert all(row.source == "" for row in rows)
+    finally:
+        db.close()

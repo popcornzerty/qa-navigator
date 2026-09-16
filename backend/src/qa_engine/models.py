@@ -151,7 +151,11 @@ class PlaywrightTest(Base):
     # re-analysis prunes the tests it no longer finds, and it can only judge the ones it
     # is able to find — without this, it read a thousand pytest tests from a report as a
     # thousand tests that had disappeared, and deleted them.
-    source: Mapped[str] = mapped_column(String(20), default="discovery")  # discovery | report
+    #
+    # Not called `source`: that name already holds a generated spec's code, and a second
+    # declaration of it silently replaced the first, so one column carried both "report"
+    # and the text of a spec.
+    recorded_from: Mapped[str] = mapped_column(String(20), default="discovery")  # discovery | report
     # Selects this test inside its file. Discovered files hold many tests; the title is
     # used rather than the line number so an edit above it does not retarget the run.
     selector: Mapped[str | None] = mapped_column(Text, nullable=True)

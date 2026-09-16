@@ -365,3 +365,23 @@ class TestStringsAreNotComments:
         )
         found = extract_tests(source, "a.spec.ts")
         assert [item.full_title for item in found] == [f"Suite{TITLE_SEPARATOR}dedans"]
+
+
+def test_a_title_built_in_a_loop_is_not_registered_as_one_test():
+    """Reading the file shows one test where Playwright runs one per iteration, under
+    titles that only exist at run time. As a row it could never be selected, so it never
+    had a verdict, while the real tests arrived from the JUnit report."""
+    from qa_engine.discovery import extract_tests
+
+    source = """
+    import { test } from "@playwright/test";
+    test.describe("Pages légales", () => {
+      for (const doc of DOCUMENTS) {
+        test(`« ${doc.court} » est un lien vers ${doc.adresse}`, async ({ page }) => {});
+      }
+      test(`le pied de page s'affiche`, async ({ page }) => {});
+      test("une adresse inconnue renvoie à l'accueil", async ({ page }) => {});
+    });
+    """
+    titles = [test.title for test in extract_tests(source, "e2e/pages-legales.spec.ts")]
+    assert titles == ["le pied de page s'affiche", "une adresse inconnue renvoie à l'accueil"]

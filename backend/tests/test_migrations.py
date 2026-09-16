@@ -183,3 +183,34 @@ def test_the_migrator_sees_the_schema_without_the_caller_importing_models(tmp_pa
         assert "playwright_tests" in Base.metadata.tables
     finally:
         engine.dispose()
+
+
+def test_a_report_marker_written_into_the_code_column_is_moved_out(tmp_path):
+    from sqlalchemy import create_engine, text
+
+    from qa_engine.migrations import _separate_recorded_from_spec_source
+
+    engine = create_engine(f"sqlite:///{(tmp_path / 'm.db').as_posix()}")
+    with engine.begin() as connection:
+        connection.execute(text(
+            "CREATE TABLE playwright_tests (id TEXT PRIMARY KEY, source TEXT, "
+            "recorded_from TEXT NOT NULL DEFAULT 'discovery')"
+        ))
+        connection.execute(text(
+            "INSERT INTO playwright_tests (id, source) VALUES "
+            "('pw-1', 'report'), ('pw-2', '// spec code'), ('pw-3', '')"
+        ))
+
+    _separate_recorded_from_spec_source(engine)
+    _separate_recorded_from_spec_source(engine)  # idempotent
+
+    with engine.connect() as connection:
+        rows = dict(
+            (row.id, (row.source, row.recorded_from))
+            for row in connection.execute(text("SELECT id, source, recorded_from FROM playwright_tests"))
+        )
+    assert rows == {
+        "pw-1": ("", "report"),
+        "pw-2": ("// spec code", "discovery"),
+        "pw-3": ("", "discovery"),
+    }

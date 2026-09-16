@@ -198,3 +198,32 @@ def ensure_schema(engine: Engine) -> None:
             logger.warning("Adding column %s.%s", table_name, column.name)
             with engine.begin() as connection:
                 connection.execute(text(statement))
+
+    # 4. Data repairs, each idempotent.
+    _separate_recorded_from_spec_source(engine)
+
+
+def _separate_recorded_from_spec_source(engine: Engine) -> None:
+    """Undo a column collision.
+
+    `playwright_tests.source` holds a generated spec's code. For a while the model also
+    declared a second `source` meaning "where this row came from", and the later
+    declaration won: rows recorded from a JUnit report were written `source = 'report'`.
+    That marker belongs in `recorded_from`; the code column goes back to empty, which is
+    what those rows held before.
+    """
+    inspector = inspect(engine)
+    if "playwright_tests" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("playwright_tests")}
+    if not {"source", "recorded_from"} <= columns:
+        return
+    with engine.begin() as connection:
+        repaired = connection.execute(
+            text(
+                "UPDATE playwright_tests SET recorded_from = 'report', source = '' "
+                "WHERE source = 'report'"
+            )
+        ).rowcount
+    if repaired:
+        logger.warning("Moved the report marker of %d tests to recorded_from", repaired)
