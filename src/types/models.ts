@@ -143,7 +143,8 @@ export interface PlaywrightTestDetail extends PlaywrightTest {
  *  failing. This is the history behind it. */
 export interface TestRun {
   id: string;
-  testId: string;
+  /** Null when the run covered a whole spec file. */
+  testId: string | null;
   projectId: string;
   scenario: string;
   file: string;

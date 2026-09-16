@@ -926,6 +926,169 @@ def queue_run(db: Session, test: PlaywrightTest) -> TestRun:
     return run
 
 
+class FileRunError(ValueError):
+    """A file run that cannot be started, with the reason to show."""
+
+
+def tests_of_file(db: Session, project_id: str, file: str) -> list[PlaywrightTest]:
+    return list(
+        db.scalars(
+            select(PlaywrightTest)
+            .where(
+                PlaywrightTest.project_id == project_id,
+                PlaywrightTest.file == file,
+                PlaywrightTest.kind == "e2e",
+            )
+            .order_by(PlaywrightTest.line, PlaywrightTest.id)
+        )
+    )
+
+
+def queue_file_run(db: Session, project: Project, file: str) -> TestRun:
+    """Open a run of every test in one spec file.
+
+    After fixing a feature a QA engineer reruns its file, not its fifteen tests one by
+    one: one Playwright process, one browser start, one login. The run belongs to the file
+    — it has no single test — and each test is updated from its own verdict when it ends.
+    """
+    tests = tests_of_file(db, project.id, file)
+    if not tests:
+        raise FileRunError(f"Aucun test navigateur enregistré pour {file}.")
+    if any(test.test_status == "running" for test in tests):
+        raise FileRunError(f"Des tests de {file} sont déjà en cours d'exécution.")
+    if not (Path(project.repository_path) / file).is_file():
+        raise FileRunError(f"{file} n'existe plus dans le dépôt : relancez l'analyse.")
+
+    run = TestRun(
+        test_id=None,
+        project_id=project.id,
+        scenario=f"{len(tests)} tests de {Path(file).name}",
+        file=file,
+        origin="discovered" if all(t.origin == "discovered" for t in tests) else "generated",
+        run_status="running",
+    )
+    db.add(run)
+    for test in tests:
+        # The previous verdict stays in `result`: it is what a failed start restores.
+        test.test_status = "running"
+    db.commit()
+    db.refresh(run)
+    return run
+
+
+def run_playwright_file(run_id: str) -> None:
+    """Execute a whole spec file and give each of its tests its own verdict."""
+    db = SessionLocal()
+    try:
+        run = db.get(TestRun, run_id)
+        if not run:
+            return
+        project = db.get(Project, run.project_id)
+        tests = tests_of_file(db, run.project_id, run.file)
+        if not project or not tests:
+            return
+
+        writer = _LogWriter(db, run)
+        located = next(
+            (t for t in tests if t.working_directory or t.playwright_project), tests[0]
+        )
+        base_url = (
+            None if all(t.origin == "discovered" for t in tests) else _base_url_for(project)
+        )
+        try:
+            outcome = execution.run_spec(
+                project.repository_path,
+                run.file,
+                base_url=base_url,
+                working_directory=located.working_directory or "",
+                playwright_project=located.playwright_project,
+                grep=None,
+                on_output=writer,
+            )
+        except execution.ExecutionError as exc:
+            logger.warning("File run %s could not start: %s", run.file, exc)
+            writer.flush()
+            run.run_status = "not_run"
+            run.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            run.error_message = str(exc)
+            for test in tests:
+                if test.test_status == "running":
+                    test.test_status = (test.result or {}).get("status") or "not_run"
+            db.commit()
+            return
+
+        executed_at = datetime.now(timezone.utc).replace(tzinfo=None)
+        writer.flush()
+        run.run_status = outcome.status
+        run.finished_at = executed_at
+        run.duration_ms = outcome.duration_ms
+        run.error_message = outcome.error_message
+        run.screenshot = outcome.screenshot
+        run.trace = outcome.trace
+        run.log = writer.text
+        run.total, run.passed, run.failed, run.skipped = (
+            outcome.total,
+            outcome.passed,
+            outcome.failed,
+            outcome.skipped,
+        )
+
+        verdicts = {verdict.title: verdict for verdict in outcome.tests}
+        stories: set[str] = set()
+        for test in tests:
+            verdict = verdicts.get(test.selector or "") or verdicts.get(test.scenario or "")
+            if verdict is None:
+                # Not in the report — renamed since the last analysis, or filtered out by
+                # the project. Its previous verdict is kept rather than guessed at.
+                test.test_status = (test.result or {}).get("status") or "not_run"
+                continue
+            test.test_status = verdict.status
+            test.last_run = executed_at
+            test.duration_ms = verdict.duration_ms
+            test.result = {
+                "status": verdict.status,
+                "executed_at": executed_at.isoformat(),
+                "duration_ms": verdict.duration_ms,
+                "error_message": verdict.error_message,
+                "screenshot": None,
+                "trace": None,
+                "console_output": None,
+            }
+            if test.user_story_id:
+                stories.add(test.user_story_id)
+        for story_id in stories:
+            _refresh_story_coverage(db, story_id)
+        db.commit()
+        logger.info("File %s finished: %s (%d tests)", run.file, outcome.status, outcome.total)
+    except Exception:
+        db.rollback()
+        logger.exception("File run crashed for %s", run_id)
+        _abandon_file_run(run_id)
+    finally:
+        db.close()
+
+
+def _abandon_file_run(run_id: str) -> None:
+    session = SessionLocal()
+    try:
+        run = session.get(TestRun, run_id)
+        if run is None:
+            return
+        if run.run_status == "running":
+            run.run_status = "not_run"
+            run.finished_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            run.error_message = "L'exécution s'est interrompue sur une erreur du moteur."
+        for test in tests_of_file(session, run.project_id, run.file):
+            if test.test_status == "running":
+                test.test_status = (test.result or {}).get("status") or "not_run"
+        session.commit()
+    except Exception:
+        session.rollback()
+        logger.exception("Could not close the abandoned file run %s", run_id)
+    finally:
+        session.close()
+
+
 def link_test_to_story(db: Session, test: PlaywrightTest, story_id: str | None) -> None:
     """Attach a test to the requirement it covers, or detach it.
 
@@ -1460,28 +1623,35 @@ def ingest_report(db: Session, project: Project, xml_text: str) -> ReportIngesti
     now = datetime.now(timezone.utc)
 
     index = _test_index(db, project.id)
+    resolve = _repository_path_resolver(project)
     matched = 0
     created = 0
 
     for reported in report.tests:
         row = _match_reported(index, reported)
+        repository_file = resolve(reported.file)
         if row is None:
             row = PlaywrightTest(
                 id=next_reference(db, PlaywrightTest, "pw"),
                 project_id=project.id,
                 scenario=reported.name,
-                file=reported.file,
+                file=repository_file,
                 origin="discovered",
                 selector=reported.name,
                 recorded_from="report",
             )
             db.add(row)
             db.flush()
-            for key in _keys_of(reported.file, reported.name):
+            for key in _keys_of(repository_file, reported.name):
                 index[key] = row
             created += 1
         else:
             matched += 1
+        if row.recorded_from == "report":
+            # Rows an earlier report created with the runner's own path get the
+            # repository's, and become runnable like the tests discovery found.
+            row.file = repository_file
+            _locate_playwright_context(project, row)
 
         row.kind = kind
         row.framework = framework
@@ -1517,6 +1687,53 @@ def ingest_report(db: Session, project: Project, xml_text: str) -> ReportIngesti
         created=created,
         duration_ms=report.duration_ms,
         counts=report.counts,
+    )
+
+
+def _repository_path_resolver(project: Project):
+    """Map the path a runner reported to the file it names in the repository.
+
+    Playwright reports paths relative to its test directory, or to its config: the same
+    file came back as `pages-legales.spec.ts` and `../e2e-reel/connexion.setup.ts` where
+    the repository has `frontend/e2e/pages-legales.spec.ts`. Kept as reported, one spec
+    file became two groups in every view that groups by file, and the tests recorded
+    under the short path could not be run, since no file by that name exists.
+
+    A reported path is replaced only by a repository file it is the unambiguous tail of.
+    Two candidates, or none — a pytest module path, a file outside the repository — and
+    the path is kept as the runner wrote it.
+    """
+    root = Path(project.repository_path)
+    try:
+        candidates = [item.relative_path for item in LocalRepositoryProvider(root)._walk()]
+    except (ValueError, OSError):
+        candidates = []
+
+    def resolve(reported: str) -> str:
+        parts = [part for part in reported.replace("\\", "/").split("/") if part not in ("", ".", "..")]
+        if not parts:
+            return reported
+        tail = "/".join(parts)
+        if tail in candidates:
+            return tail
+        matches = [path for path in candidates if path.endswith("/" + tail)]
+        return matches[0] if len(matches) == 1 else reported
+
+    return resolve
+
+
+def _locate_playwright_context(project: Project, row: PlaywrightTest) -> None:
+    """Record where Playwright must run from for a file, and which project owns it."""
+    root = Path(project.repository_path)
+    absolute = root / row.file
+    if not absolute.is_file():
+        return
+    config = discovery.find_config(root, row.file)
+    if config is None:
+        return
+    row.working_directory = config.parent.relative_to(root).as_posix()
+    row.playwright_project = discovery.project_for(
+        config.read_text(encoding="utf-8"), config.parent, absolute
     )
 
 

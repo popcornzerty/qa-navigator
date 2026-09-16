@@ -327,3 +327,52 @@ def test_a_report_row_keeps_its_provenance_apart_from_spec_code(tmp_path: Path):
         assert all(row.source == "" for row in rows)
     finally:
         db.close()
+
+
+SHORT_PATHS_REPORT = """<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="loop">
+    <testcase name="Pages › « CGU » est un lien" classname="portefeuille.spec.ts" time="0.4"/>
+    <testcase name="ouvre une session" classname="..\\e2e\\portefeuille.spec.ts" time="0.2"/>
+  </testsuite>
+</testsuites>
+"""
+
+
+def test_a_reported_path_is_mapped_to_the_repository_file(tmp_path: Path):
+    """Playwright reports paths relative to its test directory: the same file came back as
+    `pages-legales.spec.ts` and `../e2e-reel/connexion.setup.ts`. Kept as reported, one
+    spec became two groups, and its tests could not be run."""
+    repo = _repository(tmp_path, "paths")
+    with TestClient(app) as client:
+        project_id = _analysed(client, repo, "Paths")
+        client.post(f"{PREFIX}/projects/{project_id}/reports", content=SHORT_PATHS_REPORT)
+
+        files = {t["file"] for t in client.get(f"{PREFIX}/tests?project_id={project_id}").json()}
+        assert files == {"frontend/e2e/portefeuille.spec.ts"}
+
+
+def test_an_ambiguous_or_unknown_path_is_kept_as_reported(tmp_path: Path):
+    repo = _repository(tmp_path, "ambiguous")
+    (repo / "admin" / "e2e").mkdir(parents=True)
+    (repo / "admin" / "e2e" / "portefeuille.spec.ts").write_text("// autre\n", encoding="utf-8")
+    report = SHORT_PATHS_REPORT.replace("..\\e2e\\portefeuille.spec.ts", "inconnu.spec.ts")
+    with TestClient(app) as client:
+        project_id = _analysed(client, repo, "Ambiguous")
+        client.post(f"{PREFIX}/projects/{project_id}/reports", content=report)
+        files = {t["file"] for t in client.get(f"{PREFIX}/tests?project_id={project_id}").json()}
+        # Two repository files end in `portefeuille.spec.ts`: no guess is made.
+        assert "portefeuille.spec.ts" in files
+        assert "inconnu.spec.ts" in files
+
+
+def test_tests_can_be_listed_by_family(tmp_path: Path):
+    """Automation lists what it can run: a thousand pytest rows buried the browser tests."""
+    repo = _repository(tmp_path, "family")
+    with TestClient(app) as client:
+        project_id = _analysed(client, repo, "Family")
+        client.post(f"{PREFIX}/projects/{project_id}/reports", content=PYTEST_REPORT)
+        e2e = client.get(f"{PREFIX}/tests?project_id={project_id}&kind=e2e").json()
+        backend = client.get(f"{PREFIX}/tests?project_id={project_id}&kind=backend").json()
+        assert {t["kind"] for t in e2e} == {"e2e"} and len(e2e) == 2
+        assert {t["kind"] for t in backend} == {"backend"} and len(backend) == 4

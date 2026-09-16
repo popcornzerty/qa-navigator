@@ -58,6 +58,22 @@ class ExecutionOutcome:
     passed: int = 0
     failed: int = 0
     skipped: int = 0
+    #: One verdict per test the report holds. A run of a whole file updates each test from
+    #: its own line here, not all of them from the file's overall colour.
+    tests: list["TestVerdict"] = field(default_factory=list)
+
+
+@dataclass
+class TestVerdict:
+    """One test's outcome inside a Playwright report."""
+
+    #: Describe titles and the test title joined with ` › ` — what discovery stores as the
+    #: selector, so a verdict finds its row without guessing.
+    title: str
+    file: str
+    status: str
+    duration_ms: int
+    error_message: str | None = None
 
 
 def _find_npx() -> str:
@@ -71,10 +87,22 @@ def _find_npx() -> str:
 
 def _walk_specs(node: dict):
     """Yield every spec in a Playwright JSON report, whatever the suite nesting."""
-    for suite in node.get("suites", []) or []:
-        yield from _walk_specs(suite)
-    for spec in node.get("specs", []) or []:
+    for _describes, spec in _walk_specs_with_path(node):
         yield spec
+
+
+def _walk_specs_with_path(node: dict, describes: tuple[str, ...] = (), depth: int = 0):
+    """Yield `(describe titles, spec)` for every spec in a report.
+
+    The report's top-level suites are files, not describes, and their title is dropped:
+    what is kept is the chain of `describe` blocks a test sits in, as discovery records it.
+    """
+    for suite in node.get("suites", []) or []:
+        title = suite.get("title") or ""
+        inner = describes if depth == 0 or not title else (*describes, title)
+        yield from _walk_specs_with_path(suite, inner, depth + 1)
+    for spec in node.get("specs", []) or []:
+        yield describes, spec
 
 
 def _status_of(raw_status: str) -> str:
@@ -108,8 +136,10 @@ def parse_report(report: dict, repository_root: Path) -> ExecutionOutcome:
     console: list[str] = []
     first_failure: tuple[str, dict] | None = None
 
-    for spec in _walk_specs(report):
+    verdicts: list[TestVerdict] = []
+    for describes, spec in _walk_specs_with_path(report):
         title = spec.get("title") or ""
+        full_title = TITLE_SEPARATOR.join((*describes, title)) if describes else title
         for test in spec.get("tests", []) or []:
             attempts = test.get("results", []) or []
             if not attempts:
@@ -120,6 +150,16 @@ def parse_report(report: dict, repository_root: Path) -> ExecutionOutcome:
             status = _status_of(result.get("status", ""))
             tally[status] += 1
             duration += int(result.get("duration") or 0)
+            error = result.get("error") or {}
+            verdicts.append(
+                TestVerdict(
+                    title=full_title,
+                    file=relative(spec.get("file")) or spec.get("file") or "",
+                    status=status,
+                    duration_ms=int(result.get("duration") or 0),
+                    error_message=strip_ansi(error.get("message") or error.get("value")),
+                )
+            )
 
             if status == "failed" and first_failure is None:
                 first_failure = (title, result)
@@ -177,6 +217,7 @@ def parse_report(report: dict, repository_root: Path) -> ExecutionOutcome:
         passed=tally["passed"],
         failed=tally["failed"],
         skipped=tally["skipped"],
+        tests=verdicts,
     )
 
 

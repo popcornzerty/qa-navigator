@@ -1,4 +1,10 @@
-import type { PlaywrightTest, PlaywrightTestDetail, TestOrigin, TestStatus } from "../types/models";
+import type {
+  PlaywrightTest,
+  PlaywrightTestDetail,
+  TestKind,
+  TestOrigin,
+  TestStatus,
+} from "../types/models";
 import { clone, http, resolve } from "./client";
 import * as db from "./mock/data";
 
@@ -7,6 +13,8 @@ export interface TestFilters {
   userStoryId?: string;
   status?: TestStatus | "all";
   origin?: TestOrigin | "all";
+  /** `e2e` for the browser tests the engine can run; `backend` for report-only ones. */
+  kind?: TestKind | "all";
 }
 
 export const testsApi = {
@@ -21,6 +29,7 @@ export const testsApi = {
               return false;
             if (filters.origin && filters.origin !== "all" && test.origin !== filters.origin)
               return false;
+            if (filters.kind && filters.kind !== "all" && test.kind !== filters.kind) return false;
             return true;
           }),
         ),
@@ -30,6 +39,7 @@ export const testsApi = {
         if (filters.userStoryId) params.set("story_id", filters.userStoryId);
         if (filters.status && filters.status !== "all") params.set("status", filters.status);
         if (filters.origin && filters.origin !== "all") params.set("origin", filters.origin);
+        if (filters.kind && filters.kind !== "all") params.set("kind", filters.kind);
         return http<PlaywrightTest[]>(`/tests?${params.toString()}`);
       },
     );
@@ -75,6 +85,18 @@ export const testsApi = {
         http<PlaywrightTest>(`/tests/${testId}/story`, {
           method: "PATCH",
           body: JSON.stringify({ storyId }),
+        }),
+    );
+  },
+
+  /** Every browser test of one spec file, in a single Playwright process. */
+  runFile(projectId: string, file: string): Promise<{ jobId: string; status: string }> {
+    return resolve(
+      async () => ({ jobId: `job_${Math.random().toString(36).slice(2, 8)}`, status: "running" }),
+      () =>
+        http<{ jobId: string; status: string }>(`/projects/${projectId}/file-runs`, {
+          method: "POST",
+          body: JSON.stringify({ file }),
         }),
     );
   },

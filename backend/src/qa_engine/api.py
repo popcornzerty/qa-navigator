@@ -511,11 +511,17 @@ def list_tests(
     story_id: str | None = None,
     test_status: str | None = Query(default=None, alias="status"),
     origin: str | None = None,
+    kind: str | None = None,
     db: Session = Depends(get_db),
 ):
     statement = select(models.PlaywrightTest)
     if project_id:
         statement = statement.where(models.PlaywrightTest.project_id == project_id)
+    # `e2e` for the tests the engine can run from the interface; `backend` for the ones only
+    # a report knows about. Automation asks for the first: a thousand pytest rows it cannot
+    # run buried the hundred and forty browser tests it can.
+    if kind and kind != "all":
+        statement = statement.where(models.PlaywrightTest.kind == kind)
     if story_id:
         statement = statement.where(models.PlaywrightTest.user_story_id == story_id)
     if test_status and test_status != "all":
@@ -560,6 +566,28 @@ def run_test(test_id: str, background_tasks: BackgroundTasks, db: Session = Depe
     # client polling straight after sees `running` rather than the previous verdict.
     run = queue_run(db, test)
     background_tasks.add_task(run_playwright_test, run.id)
+    return schemas.JobRead(job_id=run.id, status="running", progress=0)
+
+
+@router.post(
+    "/projects/{project_id}/file-runs",
+    response_model=schemas.JobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def run_file(
+    project_id: str,
+    payload: schemas.FileRunRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    """Run every browser test of one spec file, in a single Playwright process."""
+    project = project_or_404(project_id, db)
+    try:
+        run = services.queue_file_run(db, project, payload.file)
+    except services.FileRunError as exc:
+        conflict = "déjà en cours" in str(exc)
+        raise HTTPException(status_code=409 if conflict else 404, detail=str(exc)) from None
+    background_tasks.add_task(services.run_playwright_file, run.id)
     return schemas.JobRead(job_id=run.id, status="running", progress=0)
 
 

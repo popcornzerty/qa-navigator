@@ -300,7 +300,8 @@ class TestRunRead(Wire):
     """One execution in the history."""
 
     id: str
-    test_id: str
+    # Null when the run covered a whole file rather than one test.
+    test_id: str | None
     project_id: str
     scenario: str
     file: str
@@ -481,3 +482,9 @@ class ReportIngestionRead(Wire):
     passed: int
     failed: int
     skipped: int
+
+
+class FileRunRequest(Wire):
+    """Which spec file to run, as the repository names it."""
+
+    file: str

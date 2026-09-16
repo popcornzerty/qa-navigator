@@ -185,7 +185,10 @@ class TestRun(Base):
     __tablename__ = "test_runs"
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True, default=new_id)
-    test_id: Mapped[str] = mapped_column(ForeignKey("playwright_tests.id"), index=True)
+    # Null for a run of a whole file: it belongs to every test in the file, not to one.
+    test_id: Mapped[str | None] = mapped_column(
+        ForeignKey("playwright_tests.id"), index=True, nullable=True
+    )
     # Denormalised so the executions screen can filter by project without a join.
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), index=True)
     scenario: Mapped[str] = mapped_column(String(500), default="")

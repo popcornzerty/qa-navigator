@@ -58,11 +58,21 @@ export function RunConsole({ runId, showLink = true }: { runId: string; showLink
           meta={run.status === "running" ? "live" : `${lines.length} lines`}
           actions={
             showLink ? (
-              <Link to="/automation/$testId" params={{ testId: run.testId }}>
-                <Button variant="outline" size="sm">
-                  Open test
-                </Button>
-              </Link>
+              // A run of a whole file has no single test to open: it leads to the file's
+              // group in Automation instead.
+              run.testId ? (
+                <Link to="/automation/$testId" params={{ testId: run.testId }}>
+                  <Button variant="outline" size="sm">
+                    Open test
+                  </Button>
+                </Link>
+              ) : (
+                <Link to="/automation">
+                  <Button variant="outline" size="sm">
+                    Open file
+                  </Button>
+                </Link>
+              )
             ) : null
           }
         />

@@ -1,9 +1,4 @@
-import {
-  keepPreviousData,
-  useMutation,
-  useQuery,
-  useQueryClient,
-} from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -17,6 +12,14 @@ import { Panel, PanelBody, PanelHeader } from "../components/ui/panel";
 import { StatusBadge } from "../components/ui/status-badge";
 import { useCurrentProject } from "../lib/current-project";
 import { formatDateTime, formatDuration } from "../lib/format";
+import {
+  type FileGroup,
+  type FolderGroup,
+  type GroupCounts,
+  groupTests,
+  needsAttention,
+} from "../lib/test-groups";
+import { cn } from "../lib/utils";
 import type { TestOrigin, TestStatus } from "../types/models";
 
 export const Route = createFileRoute("/automation/")({
@@ -26,7 +29,7 @@ export const Route = createFileRoute("/automation/")({
       {
         name: "description",
         content:
-          "Playwright tests generated from Gherkin scenarios, with status and last execution.",
+          "Browser tests grouped by folder and spec file, with status, last execution and runs.",
       },
       { property: "og:title", content: "Automation — AI QA Agent" },
       {
@@ -67,9 +70,15 @@ function AutomationPage() {
   const navigate = useNavigate();
   const [status, setStatus] = useState<TestStatus | "all">("all");
   const [origin, setOrigin] = useState<TestOrigin | "all">("all");
+  // Files a person opened or closed by hand. Anything else follows the rule: open when it
+  // holds something other than green.
+  const [toggled, setToggled] = useState<Record<string, boolean>>({});
 
+  // Browser tests only. The backend suite reaches the engine through JUnit reports and
+  // cannot be run from here; listed in this page, a thousand pytest rows buried the
+  // hundred and forty tests that can. It has its place in the inventory.
   const filters = useMemo<TestFilters>(() => {
-    const value: TestFilters = { status, origin };
+    const value: TestFilters = { status, origin, kind: "e2e" };
     if (projectId) value.projectId = projectId;
     return value;
   }, [projectId, status, origin]);
@@ -92,8 +101,8 @@ function AutomationPage() {
   });
 
   const { data: allTests = [] } = useQuery({
-    queryKey: ["tests", "all", projectId],
-    queryFn: () => testsApi.list(projectId ? { projectId } : {}),
+    queryKey: ["tests", "all-e2e", projectId],
+    queryFn: () => testsApi.list(projectId ? { projectId, kind: "e2e" } : { kind: "e2e" }),
     refetchInterval: (query) =>
       query.state.data?.some((item) => item.status === "running") ? 1000 : false,
   });
@@ -109,27 +118,46 @@ function AutomationPage() {
     };
   }, [allTests]);
 
+  const folders = useMemo(() => groupTests(tests), [tests]);
   const running = allTests.filter((item) => item.status === "running").length;
+  const filtering = status !== "all" || origin !== "all";
+
+  const isOpen = (file: FileGroup) =>
+    toggled[file.file] ?? (filtering || needsAttention(file.counts));
+  const setAll = (open: boolean) =>
+    setToggled(
+      Object.fromEntries(folders.flatMap((folder) => folder.files.map((f) => [f.file, open]))),
+    );
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["tests"] });
+  const watch = (message: string) =>
+    toast.success(message, {
+      // Long enough to be clicked: this is a shortcut to another screen, not a
+      // notification. A short test finishes before a four-second toast expires.
+      duration: 10_000,
+      action: { label: "Watch", onClick: () => void navigate({ to: "/runs" }) },
+    });
 
   const run = useMutation({
     mutationFn: (testId: string) => testsApi.run(testId),
     onSuccess: () => {
       invalidate();
-      // The console lives on another screen, and the moment someone wants to watch a run
-      // is the moment they start it. Without this the only way there is to know it exists.
-      toast.success("Execution started", {
-        // Long enough to be clicked: this is a shortcut to another screen, not a
-        // notification. A short test finishes before a four-second toast expires.
-        duration: 10_000,
-        action: {
-          label: "Watch",
-          onClick: () => void navigate({ to: "/runs" }),
-        },
-      });
+      watch("Execution started");
     },
     onError: () => toast.error("Could not start this execution"),
+  });
+
+  const runFile = useMutation({
+    mutationFn: (file: string) => {
+      if (!projectId) throw new Error("Select a project first.");
+      return testsApi.runFile(projectId, file);
+    },
+    onSuccess: (_job, file) => {
+      invalidate();
+      setToggled((current) => ({ ...current, [file]: true }));
+      watch(`Running every test of ${file.split("/").pop()}`);
+    },
+    onError: (error: Error) => toast.error(error.message || "Could not run this file"),
   });
 
   const regenerate = useMutation({
@@ -141,11 +169,13 @@ function AutomationPage() {
     onError: () => toast.error("Could not queue the regeneration"),
   });
 
+  const fileCount = folders.reduce((total, folder) => total + folder.files.length, 0);
+
   return (
     <>
       <PageHeader
         title="Automation"
-        subtitle="Playwright suite: what the engine generated, and what the repository already had"
+        subtitle="Browser tests, grouped by folder and spec file — the repository's own layout"
       />
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -153,7 +183,7 @@ function AutomationPage() {
           testId="metric-tests"
           label="Tests"
           value={`${stats.total}`}
-          hint="in this project"
+          hint="browser tests in this project"
         />
         <MetricCard
           testId="metric-passed"
@@ -181,16 +211,24 @@ function AutomationPage() {
       <Panel>
         <PanelHeader
           title="Playwright tests"
-          meta={isPending || isPlaceholderData ? "loading…" : `${tests.length} shown`}
+          meta={
+            isPending || isPlaceholderData
+              ? "loading…"
+              : `${tests.length} tests · ${fileCount} files`
+          }
           actions={
             <div className="flex flex-wrap items-center gap-1.5">
-              {/* The console lives on Executions. A toast pointing there is a shortcut,
-                  not a path: a short test finishes before the toast is read. */}
               <Link to="/runs">
                 <Button variant="outline" size="sm" data-testid="watch-executions">
                   {running > 0 ? `Watch ${running} running` : "Executions"}
                 </Button>
               </Link>
+              <Button variant="ghost" size="sm" onClick={() => setAll(true)}>
+                Expand all
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setAll(false)}>
+                Collapse all
+              </Button>
               <span aria-hidden className="mx-1 h-4 w-px bg-line" />
               {ORIGIN_FILTERS.map((item) => (
                 <button
@@ -224,115 +262,229 @@ function AutomationPage() {
             data-testid="origin-claim"
             className="border-b border-line px-4 py-2.5 text-xs text-muted-foreground"
           >
-            <span className="text-foreground">A passing run proves:</span>{" "}
-            {ORIGIN_PROVES[origin]}
+            <span className="text-foreground">A passing run proves:</span> {ORIGIN_PROVES[origin]}
           </p>
         )}
 
         <div
-          className={`overflow-x-auto transition-opacity ${
-            isPlaceholderData ? "pointer-events-none opacity-50" : ""
-          }`}
+          data-testid="automation-groups"
+          className={cn(
+            "transition-opacity",
+            isPlaceholderData && "pointer-events-none opacity-50",
+          )}
           aria-busy={isPlaceholderData}
         >
-          <table data-testid="automation-table" className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-line text-left text-[11px] tracking-wider text-dim uppercase">
-                <th className="px-4 py-2 font-medium">File</th>
-                <th className="px-3 py-2 font-medium">Origin</th>
-                <th className="px-3 py-2 font-medium">User Story</th>
-                <th className="px-3 py-2 font-medium">Scenario</th>
-                <th className="px-3 py-2 font-medium">Last execution</th>
-                <th className="px-3 py-2 font-medium">Duration</th>
-                <th className="px-3 py-2 font-medium">Status</th>
-                <th className="px-4 py-2 text-right font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-line">
-              {tests.map((test) => (
-                <tr
-                  key={test.id}
-                  data-testid="test-row"
-                  className="transition-colors hover:bg-panel2"
-                >
-                  <td className="px-4 py-3 font-mono text-[12px]">{test.file}</td>
-                  <td className="px-3 py-3">
-                    <OriginBadge origin={test.origin} />
-                  </td>
-                  <td className="px-3 py-3">
-                    {test.userStoryId ? (
-                      <Link
-                        to="/backlog/$storyId"
-                        params={{ storyId: test.userStoryId }}
-                        className="font-mono text-[11px] text-primary hover:underline"
-                      >
-                        {test.userStoryKey}
-                      </Link>
-                    ) : (
-                      <span className="text-[11px] text-dim">—</span>
-                    )}
-                  </td>
-                  <td className="max-w-72 truncate px-3 py-3 text-muted-foreground">
-                    {test.scenario}
-                  </td>
-                  <td className="px-3 py-3 whitespace-nowrap text-muted-foreground">
-                    {formatDateTime(test.lastRun)}
-                  </td>
-                  <td className="px-3 py-3 font-mono text-[11px] text-muted-foreground">
-                    {formatDuration(test.durationMs)}
-                  </td>
-                  <td className="px-3 py-3">
-                    <StatusBadge status={test.status} />
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex justify-end gap-2">
-                      <Link to="/automation/$testId" params={{ testId: test.id }}>
-                        <Button variant="outline" size="sm" data-testid="test-view">
-                          View
-                        </Button>
-                      </Link>
-                      <Button
-                        variant="subtle"
-                        size="sm"
-                        data-testid="test-run"
-                        disabled={run.isPending || test.status === "running"}
-                        onClick={() => run.mutate(test.id)}
-                      >
-                        {test.status === "running" ? "Running…" : "Run"}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        data-testid="test-regenerate"
-                        disabled={regenerate.isPending || test.origin === "discovered"}
-                        title={
-                          test.origin === "discovered"
-                            ? "This test was written by hand — regenerating would overwrite it."
-                            : undefined
-                        }
-                        onClick={() => regenerate.mutate(test.id)}
-                      >
-                        Regenerate
-                      </Button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {tests.length === 0 ? (
-                <tr>
-                  <td colSpan={8}>
-                    <PanelBody className="text-center text-sm text-muted-foreground">
-                      {/* On the very first load nothing is known yet, so saying that
-                          nothing matches would be an answer the app does not have. */}
-                      {isPending ? "Loading tests…" : "No Playwright test matches this filter."}
-                    </PanelBody>
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
+          {folders.length === 0 ? (
+            <PanelBody className="text-center text-sm text-muted-foreground">
+              {/* On the very first load nothing is known yet, so saying that nothing
+                  matches would be an answer the app does not have. */}
+              {isPending ? "Loading tests…" : "No Playwright test matches this filter."}
+            </PanelBody>
+          ) : (
+            folders.map((folder) => (
+              <Folder
+                key={folder.folder}
+                folder={folder}
+                isOpen={isOpen}
+                onToggle={(file, open) => setToggled((current) => ({ ...current, [file]: open }))}
+                onRunFile={(file) => runFile.mutate(file)}
+                runFilePending={runFile.isPending}
+                onRun={(testId) => run.mutate(testId)}
+                runPending={run.isPending}
+                onRegenerate={(testId) => regenerate.mutate(testId)}
+                regeneratePending={regenerate.isPending}
+              />
+            ))
+          )}
         </div>
       </Panel>
     </>
+  );
+}
+
+function Folder({
+  folder,
+  isOpen,
+  onToggle,
+  onRunFile,
+  runFilePending,
+  onRun,
+  runPending,
+  onRegenerate,
+  regeneratePending,
+}: {
+  folder: FolderGroup;
+  isOpen: (file: FileGroup) => boolean;
+  onToggle: (file: string, open: boolean) => void;
+  onRunFile: (file: string) => void;
+  runFilePending: boolean;
+  onRun: (testId: string) => void;
+  runPending: boolean;
+  onRegenerate: (testId: string) => void;
+  regeneratePending: boolean;
+}) {
+  return (
+    <section data-testid="test-folder" className="border-b border-line last:border-0">
+      <div className="flex flex-wrap items-center justify-between gap-2 bg-panel2/60 px-4 py-2">
+        <h3 className="font-mono text-[12px] text-foreground">{folder.label}/</h3>
+        <Counts counts={folder.counts} suffix={`· ${folder.files.length} files`} />
+      </div>
+
+      {folder.files.map((file) => {
+        const open = isOpen(file);
+        const running = file.counts.running > 0;
+        return (
+          <div key={file.file} data-testid="test-file" className="border-t border-line/60">
+            <div
+              className={cn(
+                "flex flex-wrap items-center justify-between gap-2 px-4 py-2.5",
+                file.counts.failed > 0 && "bg-fail/5",
+              )}
+            >
+              <button
+                type="button"
+                aria-expanded={open}
+                data-testid="test-file-toggle"
+                onClick={() => onToggle(file.file, !open)}
+                className="flex min-w-0 items-center gap-2 text-left"
+              >
+                <span
+                  aria-hidden
+                  className={cn(
+                    "inline-block w-3 text-[10px] text-dim transition-transform",
+                    open && "rotate-90",
+                  )}
+                >
+                  ▶
+                </span>
+                <span className="text-sm font-medium text-foreground">{file.label}</span>
+                <span className="truncate font-mono text-[11px] text-dim">
+                  {file.file.split("/").pop()}
+                </span>
+              </button>
+              <div className="flex items-center gap-3">
+                <Counts counts={file.counts} />
+                <Button
+                  variant="subtle"
+                  size="sm"
+                  data-testid="test-file-run"
+                  disabled={runFilePending || running}
+                  onClick={() => onRunFile(file.file)}
+                  title={`Run the ${file.counts.total} tests of this file in one Playwright process`}
+                >
+                  {running ? "Running…" : `Run file (${file.counts.total})`}
+                </Button>
+              </div>
+            </div>
+
+            {open ? (
+              <div className="overflow-x-auto">
+                <table data-testid="automation-table" className="w-full text-sm">
+                  <thead>
+                    <tr className="border-y border-line/60 text-left text-[11px] tracking-wider text-dim uppercase">
+                      <th className="py-2 pr-3 pl-10 font-medium">Scenario</th>
+                      <th className="px-3 py-2 font-medium">Origin</th>
+                      <th className="px-3 py-2 font-medium">User Story</th>
+                      <th className="px-3 py-2 font-medium">Last execution</th>
+                      <th className="px-3 py-2 font-medium">Duration</th>
+                      <th className="px-3 py-2 font-medium">Status</th>
+                      <th className="px-4 py-2 text-right font-medium">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-line/60">
+                    {file.tests.map((test) => (
+                      <tr
+                        key={test.id}
+                        data-testid="test-row"
+                        className="transition-colors hover:bg-panel2"
+                      >
+                        <td className="max-w-md py-2.5 pr-3 pl-10 text-muted-foreground">
+                          <span className="line-clamp-2">{test.scenario}</span>
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <OriginBadge origin={test.origin} />
+                        </td>
+                        <td className="px-3 py-2.5">
+                          {test.userStoryId ? (
+                            <Link
+                              to="/backlog/$storyId"
+                              params={{ storyId: test.userStoryId }}
+                              className="font-mono text-[11px] text-primary hover:underline"
+                            >
+                              {test.userStoryKey}
+                            </Link>
+                          ) : (
+                            <span className="text-[11px] text-dim">—</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2.5 whitespace-nowrap text-muted-foreground">
+                          {formatDateTime(test.lastRun)}
+                        </td>
+                        <td className="px-3 py-2.5 font-mono text-[11px] text-muted-foreground">
+                          {formatDuration(test.durationMs)}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <StatusBadge status={test.status} />
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <div className="flex justify-end gap-2">
+                            <Link to="/automation/$testId" params={{ testId: test.id }}>
+                              <Button variant="outline" size="sm" data-testid="test-view">
+                                View
+                              </Button>
+                            </Link>
+                            <Button
+                              variant="subtle"
+                              size="sm"
+                              data-testid="test-run"
+                              disabled={runPending || test.status === "running"}
+                              onClick={() => onRun(test.id)}
+                            >
+                              {test.status === "running" ? "Running…" : "Run"}
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              data-testid="test-regenerate"
+                              disabled={regeneratePending || test.origin === "discovered"}
+                              title={
+                                test.origin === "discovered"
+                                  ? "This test was written by hand — regenerating would overwrite it."
+                                  : undefined
+                              }
+                              onClick={() => onRegenerate(test.id)}
+                            >
+                              Regenerate
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
+    </section>
+  );
+}
+
+function Counts({ counts, suffix }: { counts: GroupCounts; suffix?: string }) {
+  return (
+    <span className="flex items-baseline gap-2.5 text-[11px]">
+      <span className="font-mono text-pass">{counts.passed} passed</span>
+      {counts.failed > 0 ? (
+        <span className="font-mono font-semibold text-fail">{counts.failed} failed</span>
+      ) : null}
+      {counts.running > 0 ? (
+        <span className="font-mono text-primary">{counts.running} running</span>
+      ) : null}
+      {counts.pending > 0 ? (
+        <span className="font-mono text-skip">{counts.pending} no verdict</span>
+      ) : null}
+      {suffix ? <span className="text-dim">{suffix}</span> : null}
+    </span>
   );
 }
