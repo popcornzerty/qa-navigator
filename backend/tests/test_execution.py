@@ -159,3 +159,34 @@ def test_the_child_does_not_inherit_no_color(tmp_path: Path, monkeypatch):
         execution.run_spec(str(tmp_path), "tests/a.spec.ts")
 
     assert "NO_COLOR" not in captured["env"]
+
+REFUSED_OUTPUT = [
+    "Running 2 tests using 1 worker",
+    "[WebServer] 11:31:45 [vite] http proxy error: /api/auth/login",
+    "[WebServer] Error: connect ECONNREFUSED 127.0.0.1:8801",
+    "  x  1 [connexion] › e2e-reel\\connexion.setup.ts:16:1 › ouvre une session",
+]
+
+
+def test_a_refused_backend_is_named_before_the_symptom():
+    """With the application's API down, the login never completes and Playwright reports
+    `getByRole('button', { name: 'Portefeuille' })` not visible — which reads as a broken
+    selector. The real cause sat forty lines up the console."""
+    outcome = execution.ExecutionOutcome(
+        status="failed", error_message="Error: expect(locator).toBeVisible() failed"
+    )
+    explained = execution.explain_unreachable_backend(outcome, REFUSED_OUTPUT)
+    assert explained.error_message.startswith("L'application testée ne répond pas sur 127.0.0.1:8801")
+    # The original failure is kept, below the explanation.
+    assert "toBeVisible() failed" in explained.error_message
+
+
+def test_a_passing_run_is_never_annotated():
+    outcome = execution.ExecutionOutcome(status="passed")
+    assert execution.explain_unreachable_backend(outcome, REFUSED_OUTPUT).error_message is None
+
+
+def test_a_failure_with_the_backend_up_is_left_as_it_is():
+    outcome = execution.ExecutionOutcome(status="failed", error_message="assert 1 == 2")
+    explained = execution.explain_unreachable_backend(outcome, ["Running 1 test", "  x  1 test"])
+    assert explained.error_message == "assert 1 == 2"

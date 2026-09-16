@@ -343,4 +343,41 @@ def run_spec(
             + NEWLINE.join(printed[-12:])[-600:]
         ) from exc
 
-    return parse_report(report, root)
+    return explain_unreachable_backend(parse_report(report, root), printed)
+
+
+# `connect ECONNREFUSED 127.0.0.1:8801`, as Node prints it when the dev server's proxy
+# cannot reach the application's API.
+REFUSED_CONNECTION = re.compile(r"ECONNREFUSED\s+(?P<address>[\w.\-\[\]:]+:\d+)")
+
+
+def explain_unreachable_backend(
+    outcome: ExecutionOutcome, printed: list[str]
+) -> ExecutionOutcome:
+    """Say so when a run failed because the application it tests was not running.
+
+    The dev server a suite starts is only the frontend; its API is proxied to another
+    process. With that process down, every call is refused, the login never completes,
+    and Playwright reports what it last waited for — `getByRole('button', { name:
+    'Portefeuille' })` not visible — which reads as a broken selector. The real cause sat
+    forty lines up the console, as `ECONNREFUSED 127.0.0.1:8801`.
+
+    Nothing is changed about the verdict: the test did fail. The explanation is put first,
+    where the reader looks.
+    """
+    if outcome.status != "failed":
+        return outcome
+    addresses = sorted(
+        {match.group("address") for line in printed for match in REFUSED_CONNECTION.finditer(line)}
+    )
+    if not addresses:
+        return outcome
+    hint = (
+        f"L'application testée ne répond pas sur {', '.join(addresses)} "
+        "(connexion refusée). Démarrez son backend puis relancez : l'échec ci-dessous en "
+        "est la conséquence, pas la cause."
+    )
+    outcome.error_message = (
+        f"{hint}\n\n{outcome.error_message}" if outcome.error_message else hint
+    )
+    return outcome
