@@ -35,16 +35,20 @@ function AnalysisPage() {
   const project = useQuery({
     queryKey: ["project", projectId],
     queryFn: () => projectsApi.get(projectId),
+    retry: false,
   });
   const job = useQuery({
     queryKey: ["analysis", projectId],
     queryFn: () => analysisApi.current(projectId),
+    retry: false,
   });
 
   const restart = useMutation({
     mutationFn: () => analysisApi.start(projectId),
     onSuccess: (next) => queryClient.setQueryData(["analysis", projectId], next),
   });
+
+  const loadError = project.error ?? job.error;
 
   const running = job.data?.status === "running";
 
@@ -77,6 +81,27 @@ function AnalysisPage() {
         <PanelHeader title="Pipeline" meta={job.data?.jobId} />
         {job.data ? (
           <AnalysisPipeline job={job.data} />
+        ) : loadError ? (
+          <div className="space-y-2 p-4 text-sm">
+            <p className="text-fail">
+              Impossible de charger l'analyse :{" "}
+              {loadError instanceof Error ? loadError.message : "moteur injoignable"}.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Vérifiez que le moteur tourne sur http://127.0.0.1:8000 (start-backend.cmd), puis
+              réessayez.
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                project.refetch();
+                job.refetch();
+              }}
+            >
+              Réessayer
+            </Button>
+          </div>
         ) : (
           <p className="p-4 text-sm text-muted-foreground">Loading pipeline…</p>
         )}

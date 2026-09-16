@@ -36,12 +36,13 @@ function InventoryPage() {
   const fileInput = useRef<HTMLInputElement>(null);
   const [showPassing, setShowPassing] = useState(false);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["inventory", projectId],
     queryFn: () => inventoryApi.get(projectId ?? undefined),
     // The picture has to be current at a standup without anyone pressing anything, and
     // reading stored rows costs nothing — no test is executed to answer this.
     refetchInterval: 15_000,
+    retry: false,
   });
 
   const ingest = useMutation({
@@ -60,6 +61,29 @@ function InventoryPage() {
     },
     onError: (error: Error) => toast.error(error.message),
   });
+
+  if (isError || (!isLoading && !data)) {
+    return (
+      <>
+        <PageHeader title="État des lieux" subtitle="Inventaire indisponible" />
+        <Panel>
+          <PanelBody className="space-y-2 text-sm">
+            <p className="text-fail">
+              Impossible de charger l'inventaire :{" "}
+              {error instanceof Error ? error.message : "moteur injoignable"}.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Vérifiez que le moteur tourne sur http://127.0.0.1:8000 (double-cliquez sur{" "}
+              <span className="font-mono">start-backend.cmd</span>), puis réessayez.
+            </p>
+            <Button variant="outline" size="sm" onClick={() => refetch()}>
+              Réessayer
+            </Button>
+          </PanelBody>
+        </Panel>
+      </>
+    );
+  }
 
   if (isLoading || !data) {
     return (

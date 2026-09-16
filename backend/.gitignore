@@ -8,3 +8,5 @@ work/
 *.egg-info/
 build/
 dist/
+# Hand-made copies of the database before a risky operation.
+qa_engine.db.bak*

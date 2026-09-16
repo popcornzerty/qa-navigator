@@ -5,10 +5,19 @@ from dotenv import dotenv_values
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+# The backend directory, found from this file rather than from wherever the process was
+# started. Both defaults below used to be relative to the working directory: launched from
+# the repository root instead of `backend/`, the engine silently created an empty
+# `qa_engine.db` beside the real one and stopped reading `backend/.env`. Every project
+# appeared to have vanished, and nothing said why.
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+ENV_FILE = BACKEND_DIR / ".env"
 
-    database_url: str = "sqlite:///./qa_engine.db"
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore")
+
+    database_url: str = f"sqlite:///{(BACKEND_DIR / 'qa_engine.db').as_posix()}"
     api_v1_prefix: str = "/api/v1"
     cors_origins: str = "http://localhost:5173,http://localhost:3000"
     allowed_repository_roots: str = ""
@@ -52,7 +61,12 @@ class Settings(BaseSettings):
 
     @property
     def work_root(self) -> Path:
-        root = Path(self.work_directory).expanduser().resolve()
+        # Anchored like the database, for the same reason: a relative path resolves
+        # against wherever the engine happened to be started.
+        root = Path(self.work_directory).expanduser()
+        if not root.is_absolute():
+            root = BACKEND_DIR / root
+        root = root.resolve()
         root.mkdir(parents=True, exist_ok=True)
         return root
 
@@ -60,7 +74,7 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
-def export_env_file(path: str | Path = ".env") -> list[str]:
+def export_env_file(path: str | Path = ENV_FILE) -> list[str]:
     """Publish the ``.env`` file into the process environment.
 
     pydantic-settings reads that file for its own typed fields and stops there — nothing

@@ -54,7 +54,7 @@ function NewProjectPage() {
       toast.success(`${project.name} created`);
       navigate({ to: "/projects/$projectId", params: { projectId: project.id } });
     },
-    onError: () => toast.error("Could not create the project"),
+    onError: (error: Error) => toast.error(error.message || "Could not create the project"),
   });
 
   return (
