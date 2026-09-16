@@ -119,13 +119,21 @@ class LocalRepositoryProvider(RepositoryProvider):
         In a monorepo the engine lives inside the repository it analyses, and its work
         directory holds clones of other repositories — including, potentially, a clone of
         this very one. Scanning it would double every result.
+
+        The work directory is only an artifact when it sits *below* the repository being
+        read. A repository cloned from GitHub lives inside that directory itself, and
+        testing "is this under the work directory" there excluded every subdirectory of
+        the clone: `src/`, `tests/` and the rest were skipped, and a project with a hundred
+        files was analysed as the three at its root — no route, no test, no error.
         """
+        work_root = settings.work_root
+        if self.root == work_root or work_root in self.root.parents:
+            return False
         try:
             resolved = directory.resolve()
         except OSError:
             return False
-        work_root = settings.work_root
-        return resolved == work_root or work_root in resolved.parents or resolved in (work_root,)
+        return resolved == work_root or work_root in resolved.parents
 
     @staticmethod
     def _is_binary(path: Path) -> bool:

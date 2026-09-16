@@ -2,30 +2,35 @@
 
 Independent FastAPI service backing the `qa-navigator` frontend
 (<https://github.com/popcornzerty/qa-navigator>). It analyses JS/TS/React repositories —
-a directory on this machine, or a public git repository it clones — and exposes the
+a directory on this machine, or a public git repository it clones — imports the test
+suite they already contain, runs it, reads JUnit reports from any runner, and exposes the
 whole `/api/v1` surface the UI consumes.
+
+Setting up the whole product, and testing your own project with it, is described in the
+[root README](../README.md).
 
 ## Run locally
 
 ```bash
-cd qa-engine
+cd backend
 python -m venv .venv
-.venv\Scripts\activate        # Windows PowerShell
+.venv\Scripts\activate        # macOS/Linux: source .venv/bin/activate
 pip install -e ".[dev]"
-copy .env.example .env
+copy .env.example .env        # macOS/Linux: cp .env.example .env
 uvicorn qa_engine.main:app --app-dir src --reload
 ```
+
+On Windows, `start-backend.cmd` at the repository root starts it with a double-click.
+`backend/.env`, the database and the work directory are always resolved from `backend/`,
+whatever directory the engine is started from.
 
 Interactive docs: <http://127.0.0.1:8000/docs>. OpenAPI JSON: `/openapi.json`.
 
 > The service reads `.env` **at startup only**. After changing `CORS_ORIGINS`, restart it
 > — a stale process is why the browser reports `Disallowed CORS origin`.
 
-The frontend dev server runs on port 8080, so `.env` needs:
-
-```
-CORS_ORIGINS=http://localhost:8080,http://127.0.0.1:8080
-```
+The frontend dev server runs on port 8080, which the default `CORS_ORIGINS` already
+allows.
 
 ## Implementation status
 
@@ -39,7 +44,10 @@ CORS_ORIGINS=http://localhost:8080,http://127.0.0.1:8080
 | Playwright execution | ✅ implemented (see *Execution*) |
 | Jira import (read-only) | ✅ implemented (see *Jira import*) |
 | Jira sync (writing back) | ⛔ not implemented — `POST /stories/{id}/jira-sync` returns `501` |
-| Public git repository cloning | ✅ implemented (see *Repository sources*) |
+| Public git repository cloning | ✅ implemented (see *Repository sources*) — private repositories are not supported |
+| Import of a repository's existing Playwright suite | ✅ implemented (see *Existing tests*) |
+| Execution history and live console | ✅ implemented (`/runs`) |
+| JUnit report ingestion and test inventory | ✅ implemented (see *Reports and inventory*) |
 
 Endpoints that cannot honour a request yet return **501 Not Implemented** with an explicit
 message rather than pretending to succeed.
@@ -62,10 +70,13 @@ PATCH  /stories/{id}                              PATCH /stories/{id}/acceptance
 POST   /stories/{id}/jira-sync            (501)   POST /projects/{id}/jira-import
 GET    /gherkin                                   PATCH /gherkin/{id}
 POST   /gherkin/{id}/validate                     POST /gherkin/{id}/playwright
-GET    /tests                                     GET  /tests/{id}
+POST   /features/{id}/stories                     POST /stories/{id}/gherkin
+GET    /tests?project_id=&origin=                 GET  /tests/{id}
 POST   /tests/{id}/run                            POST /tests/{id}/regenerate
-GET    /coverage?project_id=                      GET  /dashboard?project_id=
-GET    /health
+PATCH  /tests/{id}/story                          GET  /runs?test_id=&limit=
+GET    /runs/{id}?since=                          POST /projects/{id}/reports
+GET    /inventory?project_id=                     GET  /coverage?project_id=
+GET    /dashboard?project_id=                     GET  /health
 ```
 
 **Route ordering matters**: `/analyses/current` is declared before `/analyses/{analysis_id}`.
@@ -175,11 +186,14 @@ generator as the allowed selector vocabulary.
 `POST /tests/{id}/run` shells out to the project's own runner:
 
 ```bash
-npx playwright test <spec> --reporter=json
+npx playwright test <spec> --reporter=list,json [--project=<name>] [--grep <title>]
 ```
 
-run from the repository root, with `PLAYWRIGHT_BASE_URL` taken from the project's
-Playwright settings. The **JSON report is the source of truth** — a non-zero exit code is
+run from the directory holding the project's `playwright.config.*`. `--project` is the
+Playwright project the file belongs to, and `--grep` selects one test inside a file that
+holds several. `PLAYWRIGHT_BASE_URL` is set for specs the engine generated only; an
+imported suite keeps its own `baseURL`. The `list` output is streamed to the run's console
+as it is printed (`GET /runs/{id}?since=`). The **JSON report is the source of truth** — a non-zero exit code is
 normal when a test fails, so the report decides the outcome, not the exit status.
 
 What the engine persists from a run:
@@ -210,6 +224,52 @@ plus a `playwright.config.ts` whose `testDir` matches the project's configured t
 directory. `qa-navigator` is set up this way: `baseURL` reads `PLAYWRIGHT_BASE_URL`,
 `trace: "retain-on-failure"`, `screenshot: "only-on-failure"`, and a `webServer` block that
 reuses an already-running dev server and starts one otherwise.
+
+## Existing tests
+
+The `existing_tests` step registers the Playwright tests the repository already ships
+with. They are recorded with the title their author gave them — nothing infers a User
+Story from a test — and their files are never rewritten. `PATCH /tests/{id}/story` lets a
+person state which requirement one of them verifies; from then on a passing run counts
+toward that requirement's coverage.
+
+Each test is run with the project's own configuration, from the directory holding its
+`playwright.config.*`, with the `--project` its file belongs to. The engine installs
+nothing in the tested project: its dependencies and browsers must be installed, and
+whatever its tests call — typically the application's API — must be running.
+
+### Credentials for the tested suite
+
+Every variable of `backend/.env` is published into the environment of the Playwright
+process the engine starts, so a suite that signs in can read its account there. Values are
+never returned by the API nor logged; the startup log lists the names only.
+
+### Reading a failure
+
+A failure message is prefixed with what explains it when the run output shows it:
+`ECONNREFUSED` names the address that did not answer, and the page snapshot Playwright
+saves beside a failure is read for anything the page displayed with `role="alert"`.
+
+## Reports and inventory
+
+`POST /projects/{id}/reports` takes a JUnit XML report as the request body:
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/v1/projects/<id>/reports" \
+  -H "Content-Type: application/xml" --data-binary @report.xml
+```
+
+Every runner emits this format, so the inventory covers pytest, Playwright, Jest, Vitest,
+Go and the rest without the engine driving each of them. Tests the report names and the
+repository never showed are created; known ones have their verdict updated. Whether the
+report describes browser or backend tests, and which runner produced it, is deduced from
+the file names it contains.
+
+`GET /inventory` groups every test by file with its passed / failed / skipped / not-run
+counts, failing files first. It reads stored rows only and runs nothing. A test without a
+verdict is never counted as passed nor as failed: `passRate` covers only what ran.
+
+Runner commands and a CI example: [../docs/rapports-junit.md](../docs/rapports-junit.md).
 
 ## Repository sources
 
@@ -245,7 +305,8 @@ nothing is ever written back. Pushing a story to Jira writes to a system outside
 project, so it stays unimplemented until explicitly asked for.
 
 ```bash
-curl -X POST http://127.0.0.1:8000/api/v1/projects/<id>/jira-import      -H "Content-Type: application/json" -d '{"maxResults": 50}'
+curl -X POST http://127.0.0.1:8000/api/v1/projects/<id>/jira-import \
+  -H "Content-Type: application/json" -d '{"maxResults": 50}'
 ```
 
 With no `jql`, the project's Jira key drives the default query:
@@ -315,9 +376,9 @@ helper is a development convenience, not a migration tool.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `DATABASE_URL` | `sqlite:///./qa_engine.db` | Persistence |
+| `DATABASE_URL` | `backend/qa_engine.db` (SQLite) | Persistence; a relative SQLite path is resolved against `backend/` |
 | `API_V1_PREFIX` | `/api/v1` | Route prefix |
-| `CORS_ORIGINS` | `http://localhost:5173,…` | Comma-separated allowed origins |
+| `CORS_ORIGINS` | `http://localhost:8080,http://127.0.0.1:8080` | Comma-separated allowed origins |
 | `ALLOWED_REPOSITORY_ROOTS` | *(empty)* | Restricts which local paths may be analysed |
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Local generation runtime |
 | `OLLAMA_MODEL` | `qwen3.5:4b` | Model used for generation |
@@ -328,7 +389,8 @@ helper is a development convenience, not a migration tool.
 | `JIRA_EMAIL` | *(empty)* | Atlassian account email |
 | `JIRA_API_TOKEN` | *(empty)* | Atlassian API token |
 | `JIRA_ACCEPTANCE_CRITERIA_FIELD` | *(empty)* | Custom field id holding criteria |
-| `WORK_DIRECTORY` | `work` | Clones and generated artifacts |
+| `WORK_DIRECTORY` | `backend/work` | Clones and generated artifacts; a relative path is resolved against `backend/` |
+| *any other variable* | — | Passed to the tested project's Playwright process (see *Credentials for the tested suite*) |
 
 ## Tests
 

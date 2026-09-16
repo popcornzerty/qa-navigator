@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 
 from dotenv import dotenv_values
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,7 +20,9 @@ class Settings(BaseSettings):
 
     database_url: str = f"sqlite:///{(BACKEND_DIR / 'qa_engine.db').as_posix()}"
     api_v1_prefix: str = "/api/v1"
-    cors_origins: str = "http://localhost:5173,http://localhost:3000"
+    # The frontend dev server listens on 8080. The default used to name 5173 and 3000
+    # only, so an engine started without a `.env` refused every call from the interface.
+    cors_origins: str = "http://localhost:8080,http://127.0.0.1:8080"
     allowed_repository_roots: str = ""
 
     # Local generation engine. No key, no remote provider: Ollama runs on this machine.
@@ -43,6 +46,23 @@ class Settings(BaseSettings):
 
     # Working directory for cloned repositories and generated artifacts.
     work_directory: str = "work"
+
+    @field_validator("database_url")
+    @classmethod
+    def _anchor_relative_sqlite(cls, value: str) -> str:
+        """Resolve a relative SQLite path against `backend/`, not the working directory.
+
+        `.env.example` long shipped `sqlite:///./qa_engine.db`, and every `.env` copied
+        from it keeps that line. Anchoring only the default would leave those installations
+        with the very defect the default was fixed for.
+        """
+        prefix = "sqlite:///"
+        if not value.startswith(prefix):
+            return value
+        path = value[len(prefix) :]
+        if not path or path == ":memory:" or Path(path).is_absolute():
+            return value
+        return f"{prefix}{(BACKEND_DIR / path).resolve().as_posix()}"
 
     @property
     def allowed_roots(self) -> list[Path]:

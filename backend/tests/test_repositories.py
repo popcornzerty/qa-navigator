@@ -38,3 +38,30 @@ def test_engine_work_directory_is_not_scanned(tmp_path, monkeypatch):
 
     paths = [item.relative_path for item in LocalRepositoryProvider(repo).source_files()]
     assert paths == ["src/App.tsx"]
+
+
+def test_a_cloned_repository_is_read_in_full(tmp_path, monkeypatch):
+    """A repository cloned from GitHub lives inside the engine's work directory itself.
+    Testing "is this under the work directory" there excluded every subdirectory of the
+    clone, and a project with a hundred files was analysed as the three at its root."""
+    from qa_engine.config import settings
+    from qa_engine.repositories import LocalRepositoryProvider
+
+    work = tmp_path / "work"
+    clone = work / "clones" / "github.com-exemple-projet"
+    (clone / "src" / "pages").mkdir(parents=True)
+    (clone / "src" / "pages" / "Home.tsx").write_text(
+        "export const Home = () => <main />;", encoding="utf-8"
+    )
+    (clone / "tests").mkdir()
+    (clone / "tests" / "home.spec.ts").write_text("test('x', async () => {});", encoding="utf-8")
+    (clone / "index.ts").write_text("export {};", encoding="utf-8")
+
+    monkeypatch.setattr(type(settings), "work_root", property(lambda _: work))
+
+    provider = LocalRepositoryProvider(clone)
+    assert [item.relative_path for item in provider.source_files()] == [
+        "index.ts",
+        "src/pages/Home.tsx",
+    ]
+    assert [item.relative_path for item in provider.test_files()] == ["tests/home.spec.ts"]

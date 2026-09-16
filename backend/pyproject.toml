@@ -3,6 +3,7 @@ name = "ai-qa-engine"
 version = "0.1.0"
 description = "Independent, API-first analysis engine for AI QA Agent"
 requires-python = ">=3.11"
+license = "MIT"
 dependencies = [
   "fastapi>=0.115,<1.0",
   "uvicorn[standard]>=0.30,<1.0",
