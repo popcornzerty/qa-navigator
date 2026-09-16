@@ -344,12 +344,16 @@ def import_existing_tests(db: Session, project: Project) -> tuple[int, int]:
         )
     )
 
+    # Only what reading the repository can find is reconciled here. Tests recorded from a
+    # JUnit report — a backend suite, a setup file — are invisible to this scan, so their
+    # absence from it says nothing; they are left to the next report.
     existing = {
         (row.file, row.selector): row
         for row in db.scalars(
             select(PlaywrightTest).where(
                 PlaywrightTest.project_id == project.id,
                 PlaywrightTest.origin == "discovered",
+                PlaywrightTest.source != "report",
             )
         )
     }
@@ -1402,6 +1406,7 @@ def ingest_report(db: Session, project: Project, xml_text: str) -> ReportIngesti
                 file=reported.file,
                 origin="discovered",
                 selector=reported.name,
+                source="report",
             )
             db.add(row)
             db.flush()

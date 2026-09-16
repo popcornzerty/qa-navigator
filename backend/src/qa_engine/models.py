@@ -147,6 +147,11 @@ class PlaywrightTest(Base):
     # and an inventory that shows only one of them is not an inventory.
     kind: Mapped[str] = mapped_column(String(20), default="e2e")  # e2e | backend
     framework: Mapped[str] = mapped_column(String(30), default="playwright")
+    # Who put the row here: reading the repository, or reading a JUnit report. A
+    # re-analysis prunes the tests it no longer finds, and it can only judge the ones it
+    # is able to find — without this, it read a thousand pytest tests from a report as a
+    # thousand tests that had disappeared, and deleted them.
+    source: Mapped[str] = mapped_column(String(20), default="discovery")  # discovery | report
     # Selects this test inside its file. Discovered files hold many tests; the title is
     # used rather than the line number so an edit above it does not retarget the run.
     selector: Mapped[str | None] = mapped_column(Text, nullable=True)

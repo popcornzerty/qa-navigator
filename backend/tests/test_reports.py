@@ -274,3 +274,36 @@ def test_a_playwright_title_keeps_its_own_shape():
     parsed = reports.parse(PLAYWRIGHT_REPORT)
     assert parsed.tests[0].name.startswith("Portefeuille › ")
     assert "::" not in parsed.tests[0].name
+
+
+def test_a_reanalysis_keeps_the_tests_a_report_recorded(tmp_path: Path):
+    """A re-analysis prunes the tests it no longer finds in the repository. A backend
+    suite is not something it can find at all, and it read a thousand pytest tests from a
+    report as a thousand tests that had disappeared, and deleted them."""
+    repo = _repository(tmp_path, "reanalysis")
+    with TestClient(app) as client:
+        project_id = _analysed(client, repo, "Reanalysis")
+        client.post(f"{PREFIX}/projects/{project_id}/reports", content=PYTEST_REPORT)
+        before = client.get(f"{PREFIX}/inventory?project_id={project_id}").json()["totals"]
+        assert before["tests"] == 6
+
+        assert client.post(f"{PREFIX}/analyses", json={"project_id": project_id}).status_code == 202
+
+        after = client.get(f"{PREFIX}/inventory?project_id={project_id}").json()["totals"]
+        assert after["tests"] == 6
+        assert after["passed"] == before["passed"]
+        assert after["failed"] == before["failed"]
+
+
+def test_a_reanalysis_still_drops_a_spec_removed_from_the_repository(tmp_path: Path):
+    repo = _repository(tmp_path, "removed")
+    with TestClient(app) as client:
+        project_id = _analysed(client, repo, "Removed")
+        client.post(f"{PREFIX}/projects/{project_id}/reports", content=PYTEST_REPORT)
+        (repo / "frontend" / "e2e" / "portefeuille.spec.ts").unlink()
+
+        client.post(f"{PREFIX}/analyses", json={"project_id": project_id})
+
+        tests = client.get(f"{PREFIX}/tests?project_id={project_id}").json()
+        assert {t["kind"] for t in tests} == {"backend"}
+        assert len(tests) == 4
