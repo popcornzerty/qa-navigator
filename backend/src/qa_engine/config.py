@@ -30,10 +30,22 @@ class Settings(BaseSettings):
     ollama_model: str = "qwen3.5:4b"
     ollama_timeout_seconds: int = 900
     generation_language: str = "fr"
+    # Off unless asked for: an analysis with generation on discards unreviewed drafts and
+    # spends minutes of CPU per domain, and nothing the tool measures depends on it.
+    generation_enabled: bool = False
     # CPU-only inference makes generation the slowest part of an analysis. Bound the
     # number of features generated per run; 0 means every detected feature.
-    generation_enabled: bool = True
     generation_max_features: int = 3
+
+    # Which model writes the proposals. `ollama` runs on this machine and sends nothing
+    # anywhere. `openai` is any service speaking the OpenAI chat-completions protocol —
+    # Meta's Model API, OpenRouter, OpenCode Zen, a self-hosted vLLM — and sends source
+    # excerpts, screen labels and requirements to that service's servers.
+    generation_provider: str = "ollama"  # ollama | openai
+    generation_base_url: str = ""  # e.g. https://opencode.ai/zen/v1
+    generation_api_key: str = ""
+    generation_model: str = ""  # e.g. muse-spark-1.3-contributor-free
+    generation_timeout_seconds: int = 300
 
     # Jira Cloud, read-only. Credentials stay server-side and are never returned by the
     # API. Create a token at https://id.atlassian.com/manage-profile/security/api-tokens

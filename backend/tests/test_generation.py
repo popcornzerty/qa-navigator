@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from qa_engine import generation, ollama
+from qa_engine import generation, llm
 
 
 def _feature_row(tmp_path: Path) -> SimpleNamespace:
@@ -59,7 +59,7 @@ def test_stories_are_parsed_and_capped(tmp_path: Path, monkeypatch):
             for index in range(10)
         ],
     }
-    monkeypatch.setattr(generation.ollama, "chat_json", lambda *a, **k: payload)
+    monkeypatch.setattr(generation.llm, "chat_json", lambda *a, **k: payload)
 
     stories = generation.generate_stories(generation.build_context(_feature_row(tmp_path), str(tmp_path)))
 
@@ -76,7 +76,7 @@ def test_story_without_a_title_is_dropped(tmp_path: Path, monkeypatch):
             {"titre": "Valide", "description": "ok", "criteres_acceptation": ["a"]},
         ],
     }
-    monkeypatch.setattr(generation.ollama, "chat_json", lambda *a, **k: payload)
+    monkeypatch.setattr(generation.llm, "chat_json", lambda *a, **k: payload)
 
     stories = generation.generate_stories(generation.build_context(_feature_row(tmp_path), str(tmp_path)))
 
@@ -97,7 +97,7 @@ def test_scenarios_are_parsed_and_capped(tmp_path: Path, monkeypatch):
             for index in range(6)
         ]
     }
-    monkeypatch.setattr(generation.ollama, "chat_json", lambda *a, **k: payload)
+    monkeypatch.setattr(generation.llm, "chat_json", lambda *a, **k: payload)
 
     story = generation.GeneratedStory(
         title="Modifier la quantité", description="", epic="Panier", acceptance_criteria=["a"]
@@ -113,11 +113,11 @@ def test_scenarios_are_parsed_and_capped(tmp_path: Path, monkeypatch):
 
 def test_runtime_failure_propagates(tmp_path: Path, monkeypatch):
     def explode(*_args, **_kwargs):
-        raise ollama.OllamaError("connection refused")
+        raise llm.LLMError("connection refused")
 
-    monkeypatch.setattr(generation.ollama, "chat_json", explode)
+    monkeypatch.setattr(generation.llm, "chat_json", explode)
 
-    with pytest.raises(ollama.OllamaError):
+    with pytest.raises(llm.LLMError):
         generation.generate_stories(generation.build_context(_feature_row(tmp_path), str(tmp_path)))
 
 
@@ -134,7 +134,7 @@ def test_scenarios_repeated_under_a_new_title_are_dropped(tmp_path: Path, monkey
             {"scenario": "Vérifier l'état de validation", **steps},
         ]
     }
-    monkeypatch.setattr(generation.ollama, "chat_json", lambda *a, **k: payload)
+    monkeypatch.setattr(generation.llm, "chat_json", lambda *a, **k: payload)
 
     story = generation.GeneratedStory(title="Voir le statut", description="", epic="", acceptance_criteria=[])
     scenarios = generation.generate_scenarios(
@@ -161,7 +161,7 @@ def test_genuinely_different_scenarios_are_kept(tmp_path: Path, monkeypatch):
             },
         ]
     }
-    monkeypatch.setattr(generation.ollama, "chat_json", lambda *a, **k: payload)
+    monkeypatch.setattr(generation.llm, "chat_json", lambda *a, **k: payload)
 
     story = generation.GeneratedStory(title="Quantité", description="", epic="", acceptance_criteria=[])
     scenarios = generation.generate_scenarios(
@@ -271,7 +271,7 @@ def test_the_scenario_prompt_forbids_batching_behaviours(monkeypatch):
         captured.append(prompt)
         return {"scenarios": []}
 
-    monkeypatch.setattr(generation.ollama, "chat_json", capture)
+    monkeypatch.setattr(generation.llm, "chat_json", capture)
 
     context = generation.FeatureContext(
         name="Frontend",
@@ -347,7 +347,7 @@ def test_a_leaking_scenario_is_regenerated_rather_than_dropped(monkeypatch):
             ]
         }
 
-    monkeypatch.setattr(generation.ollama, "chat_json", answer)
+    monkeypatch.setattr(generation.llm, "chat_json", answer)
 
     context = generation.FeatureContext(
         name="F", description="", routes=["/"], components=[], api_calls=[],
@@ -370,7 +370,7 @@ def test_the_prompt_forbids_asserting_an_intermediate_state(monkeypatch):
         captured.append(prompt)
         return {"scenarios": []}
 
-    monkeypatch.setattr(generation.ollama, "chat_json", capture)
+    monkeypatch.setattr(generation.llm, "chat_json", capture)
 
     context = generation.FeatureContext(
         name="F", description="", routes=["/"], components=[], api_calls=[],
@@ -425,7 +425,7 @@ class TestScenarioTitles:
                 ]
             }
 
-        monkeypatch.setattr(generation.ollama, "chat_json", answer)
+        monkeypatch.setattr(generation.llm, "chat_json", answer)
         context = generation.FeatureContext(
             name="F", description="", routes=["/"], components=[], api_calls=[],
             test_ids=[], controls=[], fields=[], texts=[], has_form=False, source_files=[],

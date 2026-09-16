@@ -266,7 +266,7 @@ export interface ProjectSettings {
   branch: string;
   github: { status: "connected" | "disconnected"; account: string | null };
   jira: { status: JiraConnection; projectKey: string | null };
-  ai: { provider: AiProvider; model: string; status: "connected" | "disconnected" };
+  ai: GenerationSettings;
   playwright: { testDirectory: string; baseUrl: string; browsers: string[]; headless: boolean };
 }
 
@@ -337,4 +337,20 @@ export interface ReportIngestion {
   passed: number;
   failed: number;
   skipped: number;
+}
+
+/** The model the engine writes proposals with, and where its prompts go. Global to the
+ *  engine, set in `backend/.env`; the API key is never part of it. */
+export interface GenerationSettings {
+  /** `ollama` runs on the engine's machine; `openai` is any OpenAI-compatible API. */
+  provider: "ollama" | "openai" | "invalid" | AiProvider;
+  model: string;
+  status: "connected" | "disconnected";
+  /** True when source excerpts, screen copy and requirements leave the machine. */
+  remote: boolean;
+  endpoint: string;
+  /** Whether an analysis generates proposals on its own. */
+  enabled: boolean;
+  /** Why the configuration cannot be used, when it cannot. */
+  detail: string | null;
 }

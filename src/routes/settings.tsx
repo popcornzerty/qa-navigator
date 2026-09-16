@@ -11,6 +11,13 @@ import { useCurrentProject } from "../lib/current-project";
 import { label } from "../lib/format";
 import type { ProjectSettings } from "../types/models";
 
+const PROVIDER_LABELS: Record<string, string> = {
+  ollama: "Ollama (local)",
+  openai: "OpenAI-compatible API (remote)",
+  invalid: "Invalid configuration",
+  other: "Other",
+};
+
 export const Route = createFileRoute("/settings")({
   head: () => ({
     meta: [
@@ -227,12 +234,44 @@ function SettingsForm({ settings }: { settings: ProjectSettings }) {
         <PanelBody className="space-y-3">
           <Readonly
             label="Current provider"
-            value={draft.ai.provider === "ollama" ? "Ollama" : "Other"}
+            value={PROVIDER_LABELS[draft.ai.provider] ?? draft.ai.provider}
           />
-          <Readonly label="Model" value={draft.ai.model} />
+          <Readonly label="Model" value={draft.ai.model || "—"} />
+          <Readonly label="Endpoint" value={draft.ai.endpoint || "—"} />
           <Readonly label="Status" value={label(draft.ai.status)} />
+          <Readonly
+            label="Automatic generation"
+            value={draft.ai.enabled ? "On during analyses" : "Off — on demand only"}
+          />
+          {draft.ai.detail ? (
+            <p data-testid="ai-config-error" className="text-xs text-fail">
+              {draft.ai.detail}
+            </p>
+          ) : null}
+          {draft.ai.remote ? (
+            <div
+              data-testid="ai-remote-warning"
+              role="note"
+              className="rounded-md bg-skip/10 p-3 text-xs leading-relaxed text-skip ring-1 ring-skip/30"
+            >
+              <p className="font-semibold">Prompts leave this machine.</p>
+              <p className="mt-1">
+                Generation sends excerpts of the analysed source code, the labels and copy of its
+                screens, its routes and the requirements being written to{" "}
+                <span className="font-mono">{draft.ai.endpoint}</span>. Free and
+                &ldquo;contributor&rdquo; offers may keep them to train their models. Do not use
+                them on a private repository unless that is acceptable.
+              </p>
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Generation runs on the engine&apos;s machine. Nothing is sent to a remote service.
+            </p>
+          )}
           <p className="text-xs text-muted-foreground">
-            The AI engine runs server-side. The frontend never contacts a model provider directly.
+            Set in <span className="font-mono">backend/.env</span> (GENERATION_PROVIDER,
+            GENERATION_BASE_URL, GENERATION_MODEL, GENERATION_API_KEY). The frontend never contacts
+            a model provider directly, and the key is never shown.
           </p>
         </PanelBody>
       </Panel>

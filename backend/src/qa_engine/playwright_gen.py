@@ -19,7 +19,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 
-from qa_engine import ollama
+from qa_engine import llm
 from qa_engine.generation import SYSTEM_PROMPT, FeatureContext
 
 logger = logging.getLogger(__name__)
@@ -726,7 +726,7 @@ def _render_steps(
     temperature: float,
 ) -> tuple[list[str], list[str]]:
     """One generation round: returns the rendered step bodies and what stayed unresolved."""
-    payload = ollama.chat_json(SYSTEM_PROMPT, prompt, SPEC_SCHEMA, temperature=temperature)
+    payload = llm.chat_json(SYSTEM_PROMPT, prompt, SPEC_SCHEMA, temperature=temperature)
 
     # The prompt numbers steps from 1; internally they are 0-based.
     by_index: dict[int, list[str]] = {}

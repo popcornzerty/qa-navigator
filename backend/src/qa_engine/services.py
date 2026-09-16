@@ -37,7 +37,7 @@ from qa_engine.models import (
     TestRun,
     UserStory,
 )
-from qa_engine.ollama import OllamaError
+from qa_engine.llm import LLMError
 
 logger = logging.getLogger(__name__)
 
@@ -219,7 +219,7 @@ def _generate_backlog(db: Session, project: Project, writer: "_StepWriter") -> s
                     )
                 created.append(story)
             db.commit()
-    except OllamaError as exc:
+    except LLMError as exc:
         db.commit()
         message = str(exc)
         logger.warning("Story generation stopped: %s", message)
@@ -268,7 +268,7 @@ def _generate_backlog(db: Session, project: Project, writer: "_StepWriter") -> s
                 )
                 scenario_count += 1
             db.commit()
-    except OllamaError as exc:
+    except LLMError as exc:
         db.commit()
         message = str(exc)
         logger.warning("Gherkin generation stopped: %s", message)
@@ -703,7 +703,7 @@ def generate_backlog_for_feature(feature_id: str) -> None:
                 )
             db.commit()
         logger.info("Generated %d stories for feature %s", len(created), feature.name)
-    except OllamaError as exc:
+    except LLMError as exc:
         db.rollback()
         logger.warning("Generation failed for feature %s: %s", feature_id, exc)
     except Exception:
@@ -827,7 +827,7 @@ def generate_playwright_for_scenario(scenario_id: str) -> None:
             logger.warning(
                 "Spec %s generated with %d unresolved step(s)", spec.file_name, len(spec.unresolved)
             )
-    except OllamaError as exc:
+    except LLMError as exc:
         db.rollback()
         logger.warning("Playwright generation failed for %s: %s", scenario_id, exc)
     except Exception:
@@ -1285,7 +1285,7 @@ def regenerate_gherkin_for_story(story_id: str) -> None:
             story_id,
             len(obsolete),
         )
-    except OllamaError as exc:
+    except LLMError as exc:
         db.rollback()
         logger.warning("Gherkin regeneration failed for %s: %s", story_id, exc)
     except Exception:

@@ -11,7 +11,7 @@ from pathlib import Path
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from qa_engine import models, ollama, schemas
+from qa_engine import llm, models, schemas
 from qa_engine.config import settings
 
 
@@ -49,6 +49,31 @@ def project(db: Session, row: models.Project) -> schemas.ProjectRead:
     )
 
 
+def ai_settings() -> schemas.AiSettings:
+    """The model the engine is configured to use, and where its prompts go.
+
+    Global rather than per project: the engine has one configuration. The endpoint is
+    shown and the key never is — a person choosing a remote provider needs to see where
+    the analysed code is sent, not the credential that sends it.
+    """
+    try:
+        current = llm.provider()
+    except llm.LLMError as exc:
+        return schemas.AiSettings(
+            provider="invalid", model="", status="disconnected", remote=False,
+            endpoint="", enabled=settings.generation_enabled, detail=str(exc),
+        )
+    return schemas.AiSettings(
+        provider=current.name,
+        model=current.model,
+        status="connected" if llm.is_available() else "disconnected",
+        remote=current.remote,
+        endpoint=current.endpoint,
+        enabled=settings.generation_enabled,
+        detail=None,
+    )
+
+
 def project_settings(row: models.Project) -> schemas.ProjectSettingsRead:
     playwright = schemas.PlaywrightSettings(**(row.playwright_config or {}))
     return schemas.ProjectSettingsRead(
@@ -61,11 +86,7 @@ def project_settings(row: models.Project) -> schemas.ProjectSettingsRead:
             account=None,
         ),
         jira=schemas.JiraSettings(status=row.jira_connection, project_key=row.jira_project),
-        ai=schemas.AiSettings(
-            provider=row.ai_provider,
-            model=settings.ollama_model,
-            status="connected" if ollama.is_available() else "disconnected",
-        ),
+        ai=ai_settings(),
         playwright=playwright,
     )
 

@@ -101,7 +101,19 @@ the HTTP contract.
 
 ## Generation
 
-Steps `stories` and `gherkin` call the local Ollama runtime. The split is deliberate:
+Off by default (`GENERATION_ENABLED=false`). Steps `stories` and `gherkin`, and the
+on-demand endpoints, call the model configured by `GENERATION_PROVIDER`:
+
+- `ollama` — the local runtime. Nothing leaves the machine.
+- `openai` — any OpenAI-compatible API (`/chat/completions`), called with
+  `GENERATION_BASE_URL`, `GENERATION_MODEL` and `GENERATION_API_KEY` as a Bearer token. A
+  JSON schema is requested as structured output, and repeated in the prompt for services
+  that only honour `json_object`; a service rejecting `json_schema` is retried once
+  without it. **Prompts leave the machine**: source excerpts, screen copy, routes and the
+  requirements being written. A warning is logged at startup, and `GET
+  /projects/{id}/settings` reports `ai.remote` and `ai.endpoint` — never the key.
+
+The split between what is deterministic and what the model writes is deliberate:
 
 | Deterministic (analyzer) | Generated (model) |
 | --- | --- |
@@ -241,8 +253,10 @@ whatever its tests call — typically the application's API — must be running.
 ### Credentials for the tested suite
 
 Every variable of `backend/.env` is published into the environment of the Playwright
-process the engine starts, so a suite that signs in can read its account there. Values are
-never returned by the API nor logged; the startup log lists the names only.
+process the engine starts, so a suite that signs in can read its account there — except
+the engine's own settings (`JIRA_API_TOKEN`, `GENERATION_API_KEY`, `DATABASE_URL`…), which
+never reach the tested project. Values are never returned by the API nor logged; the
+startup log lists the names only.
 
 ### Reading a failure
 
@@ -380,10 +394,15 @@ helper is a development convenience, not a migration tool.
 | `API_V1_PREFIX` | `/api/v1` | Route prefix |
 | `CORS_ORIGINS` | `http://localhost:8080,http://127.0.0.1:8080` | Comma-separated allowed origins |
 | `ALLOWED_REPOSITORY_ROOTS` | *(empty)* | Restricts which local paths may be analysed |
+| `GENERATION_PROVIDER` | `ollama` | `ollama` (local) or `openai` (any OpenAI-compatible API — prompts leave the machine) |
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Local generation runtime |
-| `OLLAMA_MODEL` | `qwen3.5:4b` | Model used for generation |
+| `OLLAMA_MODEL` | `qwen3.5:4b` | Model used with `ollama` |
+| `GENERATION_BASE_URL` | *(empty)* | API root with `openai`, e.g. `https://opencode.ai/zen/v1` |
+| `GENERATION_MODEL` | *(empty)* | Model id with `openai`, e.g. `muse-spark-1.3-contributor-free` |
+| `GENERATION_API_KEY` | *(empty)* | Bearer key with `openai`; never returned, logged or passed to tests |
+| `GENERATION_TIMEOUT_SECONDS` | `300` | Per-request timeout with `openai` |
 | `GENERATION_LANGUAGE` | `fr` | Language of generated stories and Gherkin |
-| `GENERATION_ENABLED` | `true` | Turns the two generation steps on or off |
+| `GENERATION_ENABLED` | `false` | Whether an analysis generates proposals on its own |
 | `GENERATION_MAX_FEATURES` | `3` | Domains generated per analysis; `0` means all |
 | `JIRA_BASE_URL` | *(empty)* | e.g. `https://acme.atlassian.net` |
 | `JIRA_EMAIL` | *(empty)* | Atlassian account email |

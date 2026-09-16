@@ -13,7 +13,8 @@ Point it at a repository and it will:
 - **measure coverage against requirements a person owns** — imported from Jira, or
   generated and then approved — and link an existing test to the requirement it verifies;
 - optionally **propose** User Stories, Gherkin and Playwright specs from the code, with a
-  local model (Ollama). Proposals count for nothing until someone approves them.
+  local model (Ollama) or any OpenAI-compatible API. Proposals count for nothing until
+  someone approves them.
 
 The repository holds both halves:
 
@@ -30,7 +31,7 @@ The repository holds both halves:
 | Node.js | 20.19+ or 22.12+ | the interface, and running Playwright suites |
 | Python | 3.11+ | the engine |
 | git | any recent | analysing a GitHub repository |
-| [Ollama](https://ollama.com) | optional | proposing User Stories and Gherkin |
+| [Ollama](https://ollama.com), or an OpenAI-compatible API | optional | proposing User Stories, Gherkin and specs |
 
 ## Getting started
 
@@ -58,9 +59,9 @@ npm run dev
 
 Open <http://localhost:8080>.
 
-The engine reads `backend/.env` **at startup only**: restart it after any change. Without
-Ollama everything works except the proposal steps, which report why they did not run; set
-`GENERATION_ENABLED=false` in `backend/.env` to skip them cleanly.
+The engine reads `backend/.env` **at startup only**: restart it after any change.
+Automatic generation is off by default (`GENERATION_ENABLED=false`): everything else works
+without any model. See *Choosing the model* below to turn it on.
 
 ## Testing your project
 
@@ -101,9 +102,10 @@ MY_APP_E2E_USER=...
 MY_APP_E2E_PASSWORD=...
 ```
 
-Every variable of that file is passed to the Playwright process the engine starts. None is
-returned by the API or written to a log — only their names are. `backend/.env` is ignored
-by git.
+Every variable of that file is passed to the Playwright process the engine starts, except
+the engine's own settings — its Jira token and generation key never reach the tested
+project. None is returned by the API or written to a log; only their names are.
+`backend/.env` is ignored by git.
 
 If your application limits login attempts, reuse the session your setup saves
 (`storageState`) instead of signing in on every run; each run from the interface replays
@@ -124,6 +126,34 @@ curl -X POST "http://127.0.0.1:8000/api/v1/projects/<PROJECT_ID>/reports" \
 The same call works from a CI pipeline, or through *Importer un rapport JUnit* in the
 interface. See [docs/rapports-junit.md](docs/rapports-junit.md) for every runner and a
 pipeline example.
+
+## Choosing the model
+
+Generation only drafts proposals — User Stories, Gherkin, Playwright specs — that a person
+reviews. The inventory, runs and coverage use no model at all. Configure it in
+`backend/.env`:
+
+| | `GENERATION_PROVIDER=ollama` | `GENERATION_PROVIDER=openai` |
+| --- | --- | --- |
+| Where it runs | This machine ([Ollama](https://ollama.com)) | A remote service speaking the OpenAI API |
+| Data sent elsewhere | **None** | **Source excerpts, screen copy, routes, requirements** |
+| Speed on a CPU-only PC | Minutes per domain | Seconds |
+| Settings | `OLLAMA_BASE_URL`, `OLLAMA_MODEL` | `GENERATION_BASE_URL`, `GENERATION_MODEL`, `GENERATION_API_KEY` |
+
+Example — Muse Spark 1.3 through [OpenCode Zen](https://opencode.ai/docs/zen/):
+
+```bash
+GENERATION_PROVIDER=openai
+GENERATION_BASE_URL=https://opencode.ai/zen/v1
+GENERATION_MODEL=muse-spark-1.3-contributor-free
+GENERATION_API_KEY=<your OpenCode Zen key>
+```
+
+> ⚠️ **A remote provider receives parts of the analysed code.** Muse Spark is a proprietary
+> Meta model, not open source. Its free and "contributor" offers are paid for with data:
+> prompts and answers may be used to train Meta's models. Do not use them on a private
+> repository unless that is acceptable. The engine warns at startup and on the *Settings*
+> screen whenever prompts leave the machine.
 
 ## Troubleshooting
 

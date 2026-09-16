@@ -13,13 +13,14 @@ import urllib.error
 import urllib.request
 
 from qa_engine.config import settings
+from qa_engine.llm import LLMError
 
 logger = logging.getLogger(__name__)
 
 PROBE_TIMEOUT_SECONDS = 2
 
 
-class OllamaError(RuntimeError):
+class OllamaError(LLMError):
     """Raised when the local runtime cannot answer a generation request."""
 
 

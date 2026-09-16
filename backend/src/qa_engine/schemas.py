@@ -95,6 +95,13 @@ class AiSettings(Wire):
     provider: str
     model: str
     status: Literal["connected", "disconnected"]
+    # Whether prompts — source excerpts, screen copy, requirements — leave this machine,
+    # and for which address. The API key is never part of this.
+    remote: bool = False
+    endpoint: str = ""
+    enabled: bool = True
+    # Why the configuration cannot be used, when it cannot.
+    detail: str | None = None
 
 
 class PlaywrightSettings(Wire):

@@ -259,6 +259,27 @@ def _stream(
     return printed
 
 
+def engine_variables() -> set[str]:
+    """The names of the engine's own settings, as they appear in the environment."""
+    from qa_engine.config import Settings
+
+    return {name.upper() for name in Settings.model_fields}
+
+
+def subprocess_environment(source: dict[str, str]) -> dict[str, str]:
+    """The environment a tested project's Playwright process is given.
+
+    `backend/.env` is published into the engine's environment so a suite can read the
+    account it signs in with. It also holds the engine's own secrets — `JIRA_API_TOKEN`,
+    `GENERATION_API_KEY` — and every one of them was handed to the tested project's
+    process too, where a config file, a global setup or any dependency of a cloned
+    repository could read it. The engine's settings stay with the engine; everything else
+    passes, as before.
+    """
+    private = engine_variables()
+    return {name: value for name, value in source.items() if name.upper() not in private}
+
+
 def run_spec(
     repository_path: str,
     spec_file: str,
@@ -301,7 +322,7 @@ def run_spec(
     # `CI` is deliberately not forced here: it would switch the project config to two
     # retries, tripling the duration of every failing run. The HTML reporter is already
     # configured with `open: "never"`, so nothing tries to open a browser either way.
-    environment = {**os.environ}
+    environment = subprocess_environment(os.environ)
     # `NO_COLOR` belongs to whoever started the engine and describes *their* terminal. It
     # has no meaning for a subprocess whose output is captured and re-rendered as HTML,
     # and Playwright sets `FORCE_COLOR` for its own workers regardless — Node then prints

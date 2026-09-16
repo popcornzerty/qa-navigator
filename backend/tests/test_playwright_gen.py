@@ -76,7 +76,7 @@ def test_spec_is_runnable_when_every_step_is_grounded(tmp_path: Path, monkeypatc
             {"index": 3, "code": ['await expect(page.getByTestId("cart-total")).toBeVisible();']},
         ]
     }
-    monkeypatch.setattr(playwright_gen.ollama, "chat_json", lambda *a, **k: payload)
+    monkeypatch.setattr(playwright_gen.llm, "chat_json", lambda *a, **k: payload)
 
     spec = playwright_gen.generate_spec(
         _context(tmp_path),
@@ -106,7 +106,7 @@ def test_ungrounded_step_marks_the_test_as_fixme(tmp_path: Path, monkeypatch):
             {"index": 3, "code": []},
         ]
     }
-    monkeypatch.setattr(playwright_gen.ollama, "chat_json", lambda *a, **k: payload)
+    monkeypatch.setattr(playwright_gen.llm, "chat_json", lambda *a, **k: payload)
 
     spec = playwright_gen.generate_spec(
         _context(tmp_path),
@@ -127,7 +127,7 @@ def test_ungrounded_step_marks_the_test_as_fixme(tmp_path: Path, monkeypatch):
 
 
 def test_scenario_name_with_quotes_does_not_break_the_file(tmp_path: Path, monkeypatch):
-    monkeypatch.setattr(playwright_gen.ollama, "chat_json", lambda *a, **k: {"etapes": []})
+    monkeypatch.setattr(playwright_gen.llm, "chat_json", lambda *a, **k: {"etapes": []})
 
     spec = playwright_gen.generate_spec(
         _context(tmp_path),
@@ -147,7 +147,7 @@ def test_scenario_name_with_quotes_does_not_break_the_file(tmp_path: Path, monke
 def test_step_indices_are_one_based(tmp_path: Path, monkeypatch):
     """The prompt numbers steps from 1; an off-by-one puts assertions under "Quand"."""
     payload = {"etapes": [{"index": 1, "code": ['await page.goto("/cart");']}]}
-    monkeypatch.setattr(playwright_gen.ollama, "chat_json", lambda *a, **k: payload)
+    monkeypatch.setattr(playwright_gen.llm, "chat_json", lambda *a, **k: payload)
 
     spec = playwright_gen.generate_spec(
         _context(tmp_path),
@@ -168,7 +168,7 @@ def test_step_indices_are_one_based(tmp_path: Path, monkeypatch):
 
 def test_out_of_range_index_is_ignored(tmp_path: Path, monkeypatch):
     payload = {"etapes": [{"index": 99, "code": ['await page.goto("/cart");']}]}
-    monkeypatch.setattr(playwright_gen.ollama, "chat_json", lambda *a, **k: payload)
+    monkeypatch.setattr(playwright_gen.llm, "chat_json", lambda *a, **k: payload)
 
     spec = playwright_gen.generate_spec(
         _context(tmp_path),
@@ -195,7 +195,7 @@ def test_a_fully_unusable_answer_is_retried_once(tmp_path: Path, monkeypatch):
             return {"etapes": [{"index": 1, "code": ["console.log('nope');"]}]}
         return {"etapes": [{"index": 1, "code": ['await page.goto("/cart");']}]}
 
-    monkeypatch.setattr(playwright_gen.ollama, "chat_json", answer)
+    monkeypatch.setattr(playwright_gen.llm, "chat_json", answer)
 
     spec = playwright_gen.generate_spec(
         _context(tmp_path),
@@ -228,7 +228,7 @@ def test_a_partly_usable_answer_is_not_retried(tmp_path: Path, monkeypatch):
             ]
         }
 
-    monkeypatch.setattr(playwright_gen.ollama, "chat_json", answer)
+    monkeypatch.setattr(playwright_gen.llm, "chat_json", answer)
 
     spec = playwright_gen.generate_spec(
         _context(tmp_path),
@@ -305,7 +305,7 @@ def test_the_retry_tells_the_model_what_went_wrong(tmp_path: Path, monkeypatch):
             return {"etapes": []}
         return {"etapes": [{"index": 1, "code": ['await page.goto("/cart");']}]}
 
-    monkeypatch.setattr(playwright_gen.ollama, "chat_json", answer)
+    monkeypatch.setattr(playwright_gen.llm, "chat_json", answer)
 
     playwright_gen.generate_spec(
         _context(tmp_path),
@@ -328,7 +328,7 @@ def test_the_prompt_does_not_offer_an_empty_list_escape_hatch(tmp_path: Path, mo
     """An easy way out is the way the model takes when the constraints get tight."""
     captured: list[str] = []
     monkeypatch.setattr(
-        playwright_gen.ollama,
+        playwright_gen.llm,
         "chat_json",
         lambda _s, prompt, _sc, **k: captured.append(prompt) or {"etapes": []},
     )
@@ -430,7 +430,7 @@ def test_route_checking_is_skipped_when_no_route_list_is_given():
 def test_the_prompt_lists_the_directly_reachable_routes(tmp_path: Path, monkeypatch):
     captured: list[str] = []
     monkeypatch.setattr(
-        playwright_gen.ollama,
+        playwright_gen.llm,
         "chat_json",
         lambda _s, prompt, _sc, **k: captured.append(prompt) or {"etapes": []},
     )
@@ -469,7 +469,7 @@ def test_a_step_keeps_its_working_assertions_when_some_are_dropped(tmp_path: Pat
             }
         ]
     }
-    monkeypatch.setattr(playwright_gen.ollama, "chat_json", lambda *a, **k: payload)
+    monkeypatch.setattr(playwright_gen.llm, "chat_json", lambda *a, **k: payload)
 
     spec = playwright_gen.generate_spec(
         _context(tmp_path),
@@ -492,7 +492,7 @@ def test_a_step_keeps_its_working_assertions_when_some_are_dropped(tmp_path: Pat
 
 def test_a_step_with_nothing_executable_still_blocks(tmp_path: Path, monkeypatch):
     payload = {"etapes": [{"index": 1, "code": ["console.log('nope');"]}]}
-    monkeypatch.setattr(playwright_gen.ollama, "chat_json", lambda *a, **k: payload)
+    monkeypatch.setattr(playwright_gen.llm, "chat_json", lambda *a, **k: payload)
 
     spec = playwright_gen.generate_spec(
         _context(tmp_path),
@@ -598,7 +598,7 @@ def test_the_hydration_rule_is_offered_only_when_the_anchor_exists(tmp_path: Pat
         captured.append(prompt)
         return {"etapes": []}
 
-    monkeypatch.setattr(playwright_gen.ollama, "chat_json", capture)
+    monkeypatch.setattr(playwright_gen.llm, "chat_json", capture)
 
     without = SimpleNamespace(
         name="Frontend", description="", routes=["/"], components=[], api_calls=[],
@@ -761,7 +761,7 @@ def test_the_home_is_named_and_allowed(tmp_path: Path, monkeypatch):
         captured.append(prompt)
         return {"etapes": [{"index": 1, "code": ["await page.goto('/');"]}]}
 
-    monkeypatch.setattr(playwright_gen.ollama, "chat_json", capture)
+    monkeypatch.setattr(playwright_gen.llm, "chat_json", capture)
 
     context = SimpleNamespace(
         name="Frontend", description="", routes=["#cgu"], components=[], api_calls=[],
@@ -828,7 +828,7 @@ class TestDeclaredCredentials:
             captured.append(prompt)
             return {"etapes": []}
 
-        monkeypatch.setattr(playwright_gen.ollama, "chat_json", capture)
+        monkeypatch.setattr(playwright_gen.llm, "chat_json", capture)
         monkeypatch.setenv("PEATERM_E2E_PASSWORD", "un-mot-de-passe-reel")
 
         context = SimpleNamespace(
@@ -919,7 +919,7 @@ def test_a_when_that_only_asserts_is_reported(tmp_path: Path, monkeypatch):
             {"index": 3, "code": ["await expect(page.getByTestId('cart-total')).toBeVisible();"]},
         ]
     }
-    monkeypatch.setattr(playwright_gen.ollama, "chat_json", lambda *a, **k: payload)
+    monkeypatch.setattr(playwright_gen.llm, "chat_json", lambda *a, **k: payload)
 
     spec = playwright_gen.generate_spec(
         _context(tmp_path),
@@ -1026,7 +1026,7 @@ class TestOneNavigationPerStep:
 
     def _run(self, monkeypatch, given_code):
         monkeypatch.setattr(
-            playwright_gen.ollama,
+            playwright_gen.llm,
             "chat_json",
             lambda *a, **k: {
                 "etapes": [

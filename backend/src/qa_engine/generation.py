@@ -19,7 +19,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from qa_engine import ollama
+from qa_engine import llm
 from qa_engine.config import settings
 
 logger = logging.getLogger(__name__)
@@ -228,7 +228,7 @@ def generate_stories(context: FeatureContext) -> list[GeneratedStory]:
         "verbe conjugué (« Le bouton Analyser est visible »), jamais par un infinitif "
         "déformé."
     )
-    payload = ollama.chat_json(SYSTEM_PROMPT, prompt, STORY_SCHEMA)
+    payload = llm.chat_json(SYSTEM_PROMPT, prompt, STORY_SCHEMA)
 
     epic = str(payload.get("epic") or context.name).strip()
     stories: list[GeneratedStory] = []
@@ -380,7 +380,7 @@ def _collect_scenarios(
     prompt: str, temperature: float = 0.2
 ) -> tuple[list[GeneratedScenario], str | None]:
     """One sampling round: the usable scenarios, and the first leak that spoiled one."""
-    payload = ollama.chat_json(SYSTEM_PROMPT, prompt, SCENARIO_SCHEMA, temperature=temperature)
+    payload = llm.chat_json(SYSTEM_PROMPT, prompt, SCENARIO_SCHEMA, temperature=temperature)
 
     rejected: str | None = None
     scenarios: list[GeneratedScenario] = []
@@ -422,4 +422,4 @@ def _fingerprint(scenario: GeneratedScenario) -> tuple[str, ...]:
 
 
 def describe_engine() -> str:
-    return f"{settings.ollama_model} ({settings.generation_language})"
+    return llm.describe()

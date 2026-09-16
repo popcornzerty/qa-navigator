@@ -249,3 +249,27 @@ def test_a_missing_snapshot_leaves_the_failure_as_it_is(tmp_path):
 def test_a_passing_run_is_not_given_an_alert(tmp_path):
     outcome = execution.ExecutionOutcome(status="passed")
     assert execution.explain_page_alert(outcome, [], tmp_path).error_message is None
+
+
+def test_the_engine_secrets_never_reach_the_tested_project():
+    """`backend/.env` is published into the engine's environment so a suite can read its
+    account. The engine's own secrets were handed to the tested project's process too,
+    where any dependency of a cloned repository could read them."""
+    source = {
+        "JIRA_API_TOKEN": "jira-secret",
+        "GENERATION_API_KEY": "model-secret",
+        "generation_api_key": "lower-case-too",
+        "DATABASE_URL": "sqlite:///engine.db",
+        "MY_APP_E2E_USER": "demo",
+        "MY_APP_E2E_PASSWORD": "demo-password",
+        "PATH": "/usr/bin",
+    }
+    passed = execution.subprocess_environment(source)
+    assert "JIRA_API_TOKEN" not in passed
+    assert "GENERATION_API_KEY" not in passed
+    assert "generation_api_key" not in passed
+    assert "DATABASE_URL" not in passed
+    # What the tested suite needs still reaches it.
+    assert passed["MY_APP_E2E_USER"] == "demo"
+    assert passed["MY_APP_E2E_PASSWORD"] == "demo-password"
+    assert passed["PATH"] == "/usr/bin"

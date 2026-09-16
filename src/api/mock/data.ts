@@ -770,7 +770,15 @@ export const settings = new Map<string, ProjectSettings>(
         account: project.repositorySource === "github" ? "atlas-demo" : null,
       },
       jira: { status: project.jiraConnection, projectKey: project.jiraProject },
-      ai: { provider: project.aiProvider, model: "qwen2.5-coder:14b", status: "connected" },
+      ai: {
+        provider: "ollama",
+        model: "qwen2.5-coder:14b",
+        status: "connected",
+        remote: false,
+        endpoint: "http://127.0.0.1:11434",
+        enabled: false,
+        detail: null,
+      },
       playwright: {
         testDirectory: "tests",
         baseUrl: "https://staging.atlas-demo.test",
