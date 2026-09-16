@@ -343,7 +343,88 @@ def run_spec(
             + NEWLINE.join(printed[-12:])[-600:]
         ) from exc
 
-    return explain_unreachable_backend(parse_report(report, root), printed)
+    outcome = explain_page_alert(parse_report(report, root), printed, cwd)
+    return explain_unreachable_backend(outcome, printed)
+
+
+# Playwright prints where it saved the page snapshot of a failure:
+# `Error Context: test-results\connexion-…\error-context.md`.
+ERROR_CONTEXT = re.compile(r"Error Context:\s*(?P<path>\S.*?error-context\.md)")
+# `- alert: Trop de tentatives…` in the snapshot, or `- alert:` with the text beneath it.
+ALERT_LINE = re.compile(r"^(?P<indent>\s*)- alert(?: \"[^\"]*\")?:\s*(?P<text>.*)$")
+SNAPSHOT_TEXT = re.compile(r"^\s*- [\w-]+(?: \"[^\"]*\")?:\s*(?P<text>.+)$")
+MAX_ALERT_CHARS = 300
+
+
+def page_alerts(snapshot: str) -> list[str]:
+    """What the page was announcing as an alert when the test failed.
+
+    `role="alert"` is where an application puts the message a user has to read — a
+    refused login, a rejected form. It is also the one line of the snapshot that explains
+    a failure Playwright can only describe as a missing element.
+    """
+    lines = snapshot.splitlines()
+    alerts: list[str] = []
+    for index, line in enumerate(lines):
+        match = ALERT_LINE.match(line)
+        if not match:
+            continue
+        text = match.group("text").strip().strip('"')
+        if not text:
+            # The text sits in the children, one level deeper.
+            depth = len(match.group("indent"))
+            parts = []
+            for child in lines[index + 1 :]:
+                if len(child) - len(child.lstrip()) <= depth:
+                    break
+                found = SNAPSHOT_TEXT.match(child)
+                if found:
+                    parts.append(found.group("text").strip().strip('"'))
+            text = " ".join(parts)
+        if text and text not in alerts:
+            alerts.append(text[:MAX_ALERT_CHARS])
+    return alerts
+
+
+def explain_page_alert(
+    outcome: ExecutionOutcome, printed: list[str], cwd: Path
+) -> ExecutionOutcome:
+    """Put the message the page was showing at the top of a failure.
+
+    A login refused by the application's anti-brute-force limit surfaced as
+    `getByRole('button', { name: 'Portefeuille' })` not found. The page itself said
+    "Trop de tentatives de connexion. Réessayez dans quelques minutes." — in a snapshot
+    Playwright had written to disk, which nobody opened.
+
+    The verdict is untouched, and nothing is guessed: only what the page displayed as an
+    alert is quoted, and only when Playwright recorded it.
+    """
+    if outcome.status != "failed":
+        return outcome
+    alerts: list[str] = []
+    for line in printed:
+        match = ERROR_CONTEXT.search(line)
+        if not match:
+            continue
+        # Printed with the separators of the machine that ran it; read on any machine.
+        path = Path(match.group("path").strip().replace("\\", "/"))
+        if not path.is_absolute():
+            path = cwd / path
+        try:
+            snapshot = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        for alert in page_alerts(snapshot):
+            if alert not in alerts:
+                alerts.append(alert)
+    if not alerts:
+        return outcome
+    quoted = "\n".join(f"« {alert} »" for alert in alerts)
+    hint = f"Au moment de l'échec, la page affichait :\n{quoted}"
+    outcome.error_message = (
+        f"{hint}\n\n{outcome.error_message}" if outcome.error_message else hint
+    )
+    return outcome
 
 
 # `connect ECONNREFUSED 127.0.0.1:8801`, as Node prints it when the dev server's proxy
